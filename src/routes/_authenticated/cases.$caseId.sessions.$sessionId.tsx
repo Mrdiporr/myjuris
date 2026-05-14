@@ -1,9 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft, Mic, Pause, Play, Square, Flag, Loader2,
-  Download, FileText, AlertCircle, CheckCircle2, Save, UserCircle,
+  Download, FileText, AlertCircle, CheckCircle2, Save, UserCircle, Sparkles,
 } from "lucide-react";
+import { diarizeSession } from "@/lib/diarize.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { useRecorder } from "@/hooks/useRecorder";
@@ -60,6 +62,26 @@ function SessionPage() {
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [persisting, setPersisting] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [diarizing, setDiarizing] = useState(false);
+  const diarize = useServerFn(diarizeSession);
+
+  const runDiarization = async () => {
+    setDiarizing(true);
+    const tid = toast.loading("Running speaker diarization…");
+    try {
+      const res = await diarize({ data: { sessionId } });
+      if (res.ok) {
+        setTranscript(res.segments as TranscriptSegment[]);
+        toast.success(`Diarization complete · ${res.segments.length} segments`, { id: tid });
+      } else {
+        toast.error(res.error, { id: tid });
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Diarization failed", { id: tid });
+    } finally {
+      setDiarizing(false);
+    }
+  };
 
   const durationRef = useRef(0);
   durationRef.current = recorder.durationSeconds;
@@ -159,6 +181,8 @@ function SessionPage() {
         if (signed?.signedUrl) setAudioUrl(signed.signedUrl);
         await clearCache(sessionId);
         toast.success("Session saved");
+        // Kick off real speaker diarization in the background.
+        runDiarization();
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Failed to save");
       } finally { setPersisting(false); }
@@ -307,6 +331,9 @@ function SessionPage() {
               </div>
               <div className="flex items-center gap-2">
                 {savedAt && <span className="text-[11px] text-muted-foreground hidden sm:inline">Local cache · {new Date(savedAt).toLocaleTimeString()}</span>}
+                <Button size="sm" variant="ghost" onClick={runDiarization} disabled={diarizing || recordingState === "recording" || recordingState === "paused"} title="Run AI speaker diarization on the recorded audio">
+                  {diarizing ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />} Diarize
+                </Button>
                 <Button size="sm" variant="ghost" onClick={saveTranscriptOnly} disabled={persisting}><Save className="size-4" /> Save</Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
