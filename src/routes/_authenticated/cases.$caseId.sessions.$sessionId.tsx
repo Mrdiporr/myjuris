@@ -62,6 +62,26 @@ function SessionPage() {
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [persisting, setPersisting] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [diarizing, setDiarizing] = useState(false);
+  const diarize = useServerFn(diarizeSession);
+
+  const runDiarization = async () => {
+    setDiarizing(true);
+    const tid = toast.loading("Running speaker diarization…");
+    try {
+      const res = await diarize({ data: { sessionId } });
+      if (res.ok) {
+        setTranscript(res.segments as TranscriptSegment[]);
+        toast.success(`Diarization complete · ${res.segments.length} segments`, { id: tid });
+      } else {
+        toast.error(res.error, { id: tid });
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Diarization failed", { id: tid });
+    } finally {
+      setDiarizing(false);
+    }
+  };
 
   const durationRef = useRef(0);
   durationRef.current = recorder.durationSeconds;
