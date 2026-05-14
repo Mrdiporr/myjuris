@@ -35,6 +35,23 @@ export function useRecorder(): RecorderHook {
   const [blob, setBlob] = useState<Blob | null>(null);
   const [mimeType, setMime] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [permission, setPermission] = useState<MicPermission>("unknown");
+  const [deviceLabel, setDeviceLabel] = useState<string | null>(null);
+
+  // Probe Permissions API (where supported) on mount
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !navigator.permissions?.query) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await navigator.permissions.query({ name: "microphone" as PermissionName });
+        if (cancelled) return;
+        setPermission(status.state as MicPermission);
+        status.onchange = () => setPermission(status.state as MicPermission);
+      } catch { /* not supported (e.g. Firefox) */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const mediaRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
