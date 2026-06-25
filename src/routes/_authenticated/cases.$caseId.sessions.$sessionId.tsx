@@ -66,7 +66,10 @@ function SessionPage() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [diarizing, setDiarizing] = useState(false);
   const [permissionDialog, setPermissionDialog] = useState(false);
+  const [auditRows, setAuditRows] = useState<Array<{ id: string; action: "insert" | "update"; actor_user_id: string | null; changed_fields: string[]; occurred_at: string }>>([]);
   const diarize = useServerFn(diarizeSession);
+  const updateSessionFn = useServerFn(updateSession);
+  const fetchAudit = useServerFn(listSessionAudit);
 
   const isSecure = typeof window !== "undefined" ? window.isSecureContext : true;
   const browserHint = (() => {
