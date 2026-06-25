@@ -58,17 +58,20 @@ function CaseDetail() {
     })();
   }, [caseId]);
 
+  const createSessionFn = useServerFn(createSession);
   const newSession = async () => {
     if (!user) return;
     setCreating(true);
-    const { data, error } = await supabase.from("sessions").insert({
-      case_id: caseId,
-      user_id: user.id,
-      title: `Session ${new Date().toLocaleString()}`,
-    }).select("id").single();
-    setCreating(false);
-    if (error) { toast.error(error.message); return; }
-    navigate({ to: "/cases/$caseId/sessions/$sessionId", params: { caseId, sessionId: data.id } });
+    try {
+      const { id } = await createSessionFn({
+        data: { caseId, title: `Session ${new Date().toLocaleString()}` },
+      });
+      navigate({ to: "/cases/$caseId/sessions/$sessionId", params: { caseId, sessionId: id } });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not create session");
+    } finally {
+      setCreating(false);
+    }
   };
 
   if (loading) return <div className="grid place-items-center py-20"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>;
