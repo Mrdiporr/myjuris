@@ -1,8 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useState } from "react";
 import { ArrowLeft, Mic, Clock, FileText, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
+import { createSession } from "@/lib/sessions.functions";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -56,17 +58,20 @@ function CaseDetail() {
     })();
   }, [caseId]);
 
+  const createSessionFn = useServerFn(createSession);
   const newSession = async () => {
     if (!user) return;
     setCreating(true);
-    const { data, error } = await supabase.from("sessions").insert({
-      case_id: caseId,
-      user_id: user.id,
-      title: `Session ${new Date().toLocaleString()}`,
-    }).select("id").single();
-    setCreating(false);
-    if (error) { toast.error(error.message); return; }
-    navigate({ to: "/cases/$caseId/sessions/$sessionId", params: { caseId, sessionId: data.id } });
+    try {
+      const { id } = await createSessionFn({
+        data: { caseId, title: `Session ${new Date().toLocaleString()}` },
+      });
+      navigate({ to: "/cases/$caseId/sessions/$sessionId", params: { caseId, sessionId: id } });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not create session");
+    } finally {
+      setCreating(false);
+    }
   };
 
   if (loading) return <div className="grid place-items-center py-20"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>;

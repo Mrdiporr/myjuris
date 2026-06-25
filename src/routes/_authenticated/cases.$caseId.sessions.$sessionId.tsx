@@ -6,6 +6,7 @@ import {
   Download, FileText, AlertCircle, CheckCircle2, Save, UserCircle, Sparkles, ShieldAlert, Activity,
 } from "lucide-react";
 import { diarizeSession } from "@/lib/diarize.functions";
+import { updateSession, listSessionAudit } from "@/lib/sessions.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { useRecorder } from "@/hooks/useRecorder";
@@ -65,7 +66,10 @@ function SessionPage() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [diarizing, setDiarizing] = useState(false);
   const [permissionDialog, setPermissionDialog] = useState(false);
+  const [auditRows, setAuditRows] = useState<Array<{ id: string; action: "insert" | "update"; actor_user_id: string | null; changed_fields: string[]; occurred_at: string }>>([]);
   const diarize = useServerFn(diarizeSession);
+  const updateSessionFn = useServerFn(updateSession);
+  const fetchAudit = useServerFn(listSessionAudit);
 
   const isSecure = typeof window !== "undefined" ? window.isSecureContext : true;
   const browserHint = (() => {
@@ -207,18 +211,25 @@ function SessionPage() {
           contentType: recorder.mimeType ?? "audio/webm", upsert: true,
         });
         if (upErr) throw upErr;
-        const { error: updErr } = await supabase.from("sessions").update({
-          audio_path: path,
-          audio_mime: recorder.mimeType,
-          duration_seconds: Math.round(durationRef.current),
-          transcript: transcript as unknown as never, bookmarks: bookmarks as unknown as never,
-          ended_at: new Date().toISOString(),
-        }).eq("id", sessionId);
-        if (updErr) throw updErr;
+        await updateSessionFn({
+          data: {
+            sessionId,
+            caseId,
+            patch: {
+              audio_path: path,
+              audio_mime: recorder.mimeType ?? null,
+              duration_seconds: Math.round(durationRef.current),
+              transcript: transcript as unknown[],
+              bookmarks: bookmarks as unknown[],
+              ended_at: new Date().toISOString(),
+            },
+          },
+        });
         const { data: signed } = await supabase.storage.from("session-audio").createSignedUrl(path, 3600);
         if (signed?.signedUrl) setAudioUrl(signed.signedUrl);
         await clearCache(sessionId);
         toast.success("Session saved");
+        loadAudit();
         // Kick off real speaker diarization in the background.
         runDiarization();
       } catch (e) {
@@ -234,14 +245,36 @@ function SessionPage() {
     toast.success(`Flagged at ${formatTime(durationRef.current)}`);
   };
 
+  const loadAudit = async () => {
+    try {
+      const { rows } = await fetchAudit({ data: { sessionId } });
+      setAuditRows(rows);
+    } catch { /* non-fatal */ }
+  };
+
+  useEffect(() => { loadAudit(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [sessionId]);
+
   const saveTranscriptOnly = async () => {
     setPersisting(true);
-    const { error } = await supabase.from("sessions").update({
-      transcript: transcript as unknown as never, bookmarks: bookmarks as unknown as never, duration_seconds: Math.round(durationRef.current),
-    }).eq("id", sessionId);
-    setPersisting(false);
-    if (error) toast.error(error.message);
-    else toast.success("Saved");
+    try {
+      await updateSessionFn({
+        data: {
+          sessionId,
+          caseId,
+          patch: {
+            transcript: transcript as unknown[],
+            bookmarks: bookmarks as unknown[],
+            duration_seconds: Math.round(durationRef.current),
+          },
+        },
+      });
+      toast.success("Saved");
+      loadAudit();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setPersisting(false);
+    }
   };
 
   const exportDocx = async () => {
@@ -502,6 +535,37 @@ function SessionPage() {
               )}
             </div>
           </Card>
+
+          <Card className="p-0">
+            <div className="p-4 border-b border-border flex items-center gap-2">
+              <Activity className="size-4 text-muted-foreground" />
+              <h2 className="font-medium">Activity</h2>
+              <Badge variant="outline" className="text-[10px]">{auditRows.length}</Badge>
+            </div>
+            <div className="p-3 max-h-[280px] overflow-auto">
+              {auditRows.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">No activity recorded yet.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {auditRows.map((a) => (
+                    <li key={a.id} className="text-xs p-2 rounded-md bg-muted/40 border border-border">
+                      <div className="flex items-center justify-between gap-2">
+                        <Badge variant={a.action === "insert" ? "default" : "outline"} className="text-[10px] capitalize">{a.action}</Badge>
+                        <span className="font-mono tabular-nums text-muted-foreground">{new Date(a.occurred_at).toLocaleString()}</span>
+                      </div>
+                      <div className="mt-1 text-muted-foreground truncate" title={a.actor_user_id ?? ""}>
+                        by {a.actor_user_id ? `${a.actor_user_id.slice(0, 8)}…` : "system"}
+                        {a.changed_fields.length > 0 && (
+                          <span> · {a.changed_fields.join(", ")}</span>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </Card>
+
 
           <Card className="p-4">
             <h3 className="text-sm font-medium mb-3 flex items-center gap-2"><CheckCircle2 className="size-4 text-success" /> Status</h3>
