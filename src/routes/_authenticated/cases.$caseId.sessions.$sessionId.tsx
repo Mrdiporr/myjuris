@@ -536,6 +536,37 @@ function SessionPage() {
             </div>
           </Card>
 
+          <Card className="p-0">
+            <div className="p-4 border-b border-border flex items-center gap-2">
+              <Activity className="size-4 text-muted-foreground" />
+              <h2 className="font-medium">Activity</h2>
+              <Badge variant="outline" className="text-[10px]">{auditRows.length}</Badge>
+            </div>
+            <div className="p-3 max-h-[280px] overflow-auto">
+              {auditRows.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">No activity recorded yet.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {auditRows.map((a) => (
+                    <li key={a.id} className="text-xs p-2 rounded-md bg-muted/40 border border-border">
+                      <div className="flex items-center justify-between gap-2">
+                        <Badge variant={a.action === "insert" ? "default" : "outline"} className="text-[10px] capitalize">{a.action}</Badge>
+                        <span className="font-mono tabular-nums text-muted-foreground">{new Date(a.occurred_at).toLocaleString()}</span>
+                      </div>
+                      <div className="mt-1 text-muted-foreground truncate" title={a.actor_user_id ?? ""}>
+                        by {a.actor_user_id ? `${a.actor_user_id.slice(0, 8)}…` : "system"}
+                        {a.changed_fields.length > 0 && (
+                          <span> · {a.changed_fields.join(", ")}</span>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </Card>
+
+
           <Card className="p-4">
             <h3 className="text-sm font-medium mb-3 flex items-center gap-2"><CheckCircle2 className="size-4 text-success" /> Status</h3>
             <ul className="space-y-2 text-xs text-muted-foreground">
