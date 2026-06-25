@@ -245,14 +245,36 @@ function SessionPage() {
     toast.success(`Flagged at ${formatTime(durationRef.current)}`);
   };
 
+  const loadAudit = async () => {
+    try {
+      const { rows } = await fetchAudit({ data: { sessionId } });
+      setAuditRows(rows);
+    } catch { /* non-fatal */ }
+  };
+
+  useEffect(() => { loadAudit(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [sessionId]);
+
   const saveTranscriptOnly = async () => {
     setPersisting(true);
-    const { error } = await supabase.from("sessions").update({
-      transcript: transcript as unknown as never, bookmarks: bookmarks as unknown as never, duration_seconds: Math.round(durationRef.current),
-    }).eq("id", sessionId);
-    setPersisting(false);
-    if (error) toast.error(error.message);
-    else toast.success("Saved");
+    try {
+      await updateSessionFn({
+        data: {
+          sessionId,
+          caseId,
+          patch: {
+            transcript: transcript as unknown[],
+            bookmarks: bookmarks as unknown[],
+            duration_seconds: Math.round(durationRef.current),
+          },
+        },
+      });
+      toast.success("Saved");
+      loadAudit();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setPersisting(false);
+    }
   };
 
   const exportDocx = async () => {
