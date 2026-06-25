@@ -211,18 +211,25 @@ function SessionPage() {
           contentType: recorder.mimeType ?? "audio/webm", upsert: true,
         });
         if (upErr) throw upErr;
-        const { error: updErr } = await supabase.from("sessions").update({
-          audio_path: path,
-          audio_mime: recorder.mimeType,
-          duration_seconds: Math.round(durationRef.current),
-          transcript: transcript as unknown as never, bookmarks: bookmarks as unknown as never,
-          ended_at: new Date().toISOString(),
-        }).eq("id", sessionId);
-        if (updErr) throw updErr;
+        await updateSessionFn({
+          data: {
+            sessionId,
+            caseId,
+            patch: {
+              audio_path: path,
+              audio_mime: recorder.mimeType ?? null,
+              duration_seconds: Math.round(durationRef.current),
+              transcript: transcript as unknown[],
+              bookmarks: bookmarks as unknown[],
+              ended_at: new Date().toISOString(),
+            },
+          },
+        });
         const { data: signed } = await supabase.storage.from("session-audio").createSignedUrl(path, 3600);
         if (signed?.signedUrl) setAudioUrl(signed.signedUrl);
         await clearCache(sessionId);
         toast.success("Session saved");
+        loadAudit();
         // Kick off real speaker diarization in the background.
         runDiarization();
       } catch (e) {
