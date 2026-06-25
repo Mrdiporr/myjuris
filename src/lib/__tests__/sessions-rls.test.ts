@@ -57,8 +57,8 @@ d("sessions RLS regression", () => {
     if (b.error) throw new Error(b.error.message);
     caseB = b.data.id;
 
-    cleanup.push(() => A.client.from("cases").delete().eq("id", caseA));
-    cleanup.push(() => B.client.from("cases").delete().eq("id", caseB));
+    cleanup.push(async () => { await A.client.from("cases").delete().eq("id", caseA); });
+    cleanup.push(async () => { await B.client.from("cases").delete().eq("id", caseB); });
   });
 
   afterAll(async () => {
