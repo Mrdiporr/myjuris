@@ -6,6 +6,7 @@ import {
   Download, FileText, AlertCircle, CheckCircle2, Save, UserCircle, Sparkles, ShieldAlert, Activity,
 } from "lucide-react";
 import { diarizeSession } from "@/lib/diarize.functions";
+import { updateSession, listSessionAudit } from "@/lib/sessions.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { useRecorder } from "@/hooks/useRecorder";
