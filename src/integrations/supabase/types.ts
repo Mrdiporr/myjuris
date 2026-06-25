@@ -50,6 +50,36 @@ export type Database = {
         }
         Relationships: []
       }
+      session_audit_log: {
+        Row: {
+          action: string
+          actor_user_id: string | null
+          case_id: string
+          changed_fields: Json
+          id: string
+          occurred_at: string
+          session_id: string
+        }
+        Insert: {
+          action: string
+          actor_user_id?: string | null
+          case_id: string
+          changed_fields?: Json
+          id?: string
+          occurred_at?: string
+          session_id: string
+        }
+        Update: {
+          action?: string
+          actor_user_id?: string | null
+          case_id?: string
+          changed_fields?: Json
+          id?: string
+          occurred_at?: string
+          session_id?: string
+        }
+        Relationships: []
+      }
       sessions: {
         Row: {
           audio_mime: string | null
