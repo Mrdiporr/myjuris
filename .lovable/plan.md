@@ -1,72 +1,79 @@
-# Pre-Deployment Readiness — myJuris
+# Pre-Deployment Priorities — Recommended Order
 
-Status: core features built, security hardening verified. Below is what remains before flipping to production.
+Ranked by risk-to-launch. Each item has: **why it matters**, **alternative (cheaper path)**, **advice**.
 
-## 1. Functional gaps in committed scope
+---
 
-- **MP3 export**: `src/lib/export.ts` ships WAV/PDF/DOCX only. Either add lamejs-based MP3 encoding in a Web Worker or update the UI/spec to advertise WAV+compressed (Opus/WebM) instead of MP3.
-- **Combined ZIP download**: earlier plan promised "audio + transcript together" — confirm the download menu in the session route bundles a single ZIP, or drop the promise.
-- **Flags feature finish-line**: verify timestamped flags persist via `updateSession`, render as inline transcript markers, and survive reload from IndexedDB.
-- **IndexedDB restore-on-reload**: confirm partial recordings actually rehydrate after a refresh mid-session (chunks + transcript + flags), not just write.
-- **Activity timeline polish**: confirm chronological order, actor email lookup decision (kept as UUID per security report), and empty/error states.
+## Tier 1 — Must fix before publish (blockers)
 
-## 2. Auth & access
+### 1. Google OAuth button on `/auth` will error on click
+- **Why**: The button is rendered but no provider is configured. First-time users clicking it get "Unsupported provider" — worst possible first impression for a legal product.
+- **Alternative**: Remove the Google button entirely and ship email/password only. Zero config, zero risk.
+- **Advice**: If courts/clerks use Google Workspace, enable it (managed by Lovable Cloud, no keys needed). Otherwise remove — you can add later without migration.
 
-- **Google OAuth provider**: configure in Lovable Cloud auth settings, or remove the Google button from `/auth` to avoid "Unsupported provider" on first click.
-- **Email confirmation policy**: decide confirm-on-signup vs. auto-confirm; today's setting drives the first-run UX.
-- **Password reset + email change flows**: not yet wired in `src/routes/auth.tsx`.
-- **Session timeout / re-auth** for long courtroom recordings (token refresh works, but verify behavior across 2h+ sessions).
+### 2. Consent banner + Data Processing disclosure
+- **Why**: Recording proceedings without disclosing that audio is uploaded to Supabase Storage and shipped to **AssemblyAI** (a US third party) is a legal exposure in most jurisdictions. Many require all-party consent.
+- **Alternative**: A one-time modal on first recording ("This session will be recorded and processed by a third-party transcription service. Continue?") is 80% of the value of a full policy.
+- **Advice**: Non-negotiable for a courtroom product. Ship even a minimal version before launch; a proper Privacy Policy + Terms page can follow.
 
-## 3. Browser & device compatibility
+### 3. Suit-number uniqueness at DB level
+- **Why**: Today it's client-checked only. Two tabs / two clerks can create duplicate suit numbers → case-file confusion in a legal context is a data-integrity bug, not a UX bug.
+- **Alternative**: None worth taking — this is a one-line migration: partial unique index `(user_id, lower(suit_number))`.
+- **Advice**: Cheapest high-value item on the list. Do it.
 
-- **Web Speech API**: Chrome/Edge only. Add a capability check + clear fallback message on Firefox/Safari, or document the supported-browser matrix on the landing page.
-- **HTTPS requirement**: already enforced on Lovable domain; document for self-host.
-- **Mobile / tablet recording**: spot-check iOS Safari (MediaRecorder support is partial) and Android Chrome.
+### 4. Browser capability check for Web Speech API
+- **Why**: Web Speech API is Chrome/Edge only. A Firefox/Safari user hits "Record" and gets silence with no explanation — looks like the app is broken.
+- **Alternative**: A capability check on the record button ("Live transcription requires Chrome or Edge. Recording will still work; transcript will be generated after upload via diarization.") — no code path changes, just messaging.
+- **Advice**: Diarization already provides a transcript post-hoc, so the fallback is real, not just a warning. Ship the message.
 
-## 4. Test & CI
+---
 
-- Add the three deferred regression tests from the assurance report:
-  1. `diarize.updateTranscript` cross-tenant denial.
-  2. `REVOKE EXECUTE` on definer functions.
-  3. Tighten "audit cannot be modified" to assert zero rows affected.
-- Wire `bun run test` into a CI job with the two test-user secrets so the RLS suite actually runs (today it auto-skips).
+## Tier 2 — Strongly recommended (quality-of-launch)
 
-## 5. Operational hardening
+### 5. Password reset flow
+- **Why**: Users **will** forget passwords. Without a `/reset-password` route they're locked out permanently.
+- **Alternative**: None. Cloud auth ships the email; you just need the reset page.
+- **Advice**: ~30 min of work. Do it.
 
-- **Rate limiting** on `createSession`, `updateSession`, and `diarizeSession` (AssemblyAI cost exposure). Postgres-side counter or edge middleware.
-- **Suit-number uniqueness at DB level**: today enforced client-side only. Add a partial unique index `(user_id, lower(suit_number))` so concurrent submits can't collide.
-- **Storage lifecycle**: decide retention for audio in the `recordings` bucket; add a cleanup policy or admin UI before storage costs grow.
-- **Error reporting**: `src/lib/error-capture.ts` exists — confirm it ships errors somewhere queryable (Sentry/Logflare) or accept console-only.
-- **Backups**: confirm Lovable Cloud automated backups cover the project tier, document restore procedure.
+### 6. Rate limit `diarizeSession`
+- **Why**: AssemblyAI is paid per minute. A compromised account or a script kiddie can burn your budget in an hour.
+- **Alternative**: Since the backend has no standard rate-limit primitive, the pragmatic MVP is a Postgres counter (calls-per-user-per-day) checked inside `diarizeSession`. Not perfect, but bounds worst-case spend.
+- **Advice**: At minimum add a hard daily cap per user. Full rate limiting can wait.
 
-## 6. Legal / product surface
+### 7. Publish preflight — favicon + security scan
+- **Why**: Missing favicon = unprofessional. A fresh security scan catches anything the last hardening pass missed.
+- **Alternative**: None. Both are ~5 min.
+- **Advice**: Run the scan **last**, immediately before publish.
 
-- **Privacy policy + Terms** pages (court recordings + third-party diarization disclosure for AssemblyAI).
-- **Data Processing notice**: audio leaves the browser → Supabase Storage → AssemblyAI. Must be disclosed to clerks/users.
-- **Per-jurisdiction consent banner** before recording starts (some jurisdictions require all-party consent).
-- **Export watermarking / chain-of-custody footer** on PDF transcripts for evidentiary use.
+---
 
-## 7. SEO & publish preflight
+## Tier 3 — Post-launch is fine
 
-- Root `__root.tsx` already has title/description/OG/Twitter/og:image — good.
-- Add a favicon + apple-touch-icon if not already present in `public/`.
-- Add per-route `head()` for `/auth` and `/dashboard` (dashboard already has one; check auth route).
-- Run `security--run_security_scan` immediately before publish; fix any new criticals.
+- **MP3 export** — WAV works for evidentiary use (lossless is arguably better for courts). Advertise WAV; add MP3 later only if users ask.
+- **Combined ZIP download** — nice-to-have; individual downloads already work.
+- **CI test job** — the RLS tests already exist; wiring them into CI is good hygiene but doesn't block launch.
+- **Deferred regression tests** (3 items) — coverage improvement, not a gap.
+- **Storage lifecycle policy** — irrelevant until you have volume.
+- **Session timeout for 2h+ recordings** — verify empirically once real users hit it.
+- **PDF watermarking / chain-of-custody footer** — needed for formal evidentiary use; not for beta.
+- **Activity timeline polish, IndexedDB restore verification, Flags finish-line** — QA passes, not new features. Roll into a single "smoke test everything on prod build" session (item #7 already implies this).
 
-## 8. Deployment mechanics
+---
 
-- Confirm `ASSEMBLYAI_API_KEY` is set as a server secret (not just local).
-- Verify `wrangler.jsonc` has `nodejs_compat` if any server fn relies on Node built-ins.
-- Smoke-test the production build locally: record → stop → diarize → export each format → reload mid-session.
-- First publish via `preview_ui--publish`, then connect custom domain if desired.
+## Recommended execution order
 
-## Recommended order
+1. Google OAuth decision (configure or remove) — 10 min
+2. Suit-number DB unique index — 10 min
+3. Capability check message on record button — 20 min
+4. Password reset route — 30 min
+5. Consent modal on first recording — 45 min
+6. Daily cap on `diarizeSession` — 30 min
+7. Favicon + security scan + publish — 15 min
 
-1. Decide MP3 vs WAV-only; close (1).
-2. Configure Google OAuth or remove the button; close (2).
-3. Add suit-number unique index + rate limiting; close (5).
-4. Privacy/Terms/consent pages; close (6).
-5. CI test job + 3 deferred tests; close (4).
-6. Security scan → publish.
+**Total: ~2.5 hours to a defensible launch.**
 
-Tell me which sections to actually implement and I'll start with the highest-impact ones.
+Everything in Tier 3 can ship as v1.1.
+
+---
+
+Tell me which tiers/items to execute (e.g. "do all of Tier 1", "Tier 1 + items 5 and 6", "everything except MP3") and I'll switch to build mode and implement in that order.
