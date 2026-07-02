@@ -77,6 +77,13 @@ export const diarizeSession = createServerFn({ method: "POST" })
       // fail closed on quota bookkeeping errors
       return { ok: false as const, error: "Could not verify usage quota." };
     }
+
+    // Load session row (RLS scoped to user).
+    const { data: session, error: sErr } = await supabase
+      .from("sessions")
+      .select("id,user_id,audio_path")
+      .eq("id", data.sessionId)
+      .maybeSingle();
     if (sErr) return { ok: false as const, error: sErr.message };
     if (!session?.audio_path) {
       return { ok: false as const, error: "No audio uploaded for this session yet." };
