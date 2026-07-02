@@ -48,12 +48,35 @@ export const diarizeSession = createServerFn({ method: "POST" })
 
     const { supabase, userId } = context;
 
-    // Load session row (RLS scoped to user).
-    const { data: session, error: sErr } = await supabase
-      .from("sessions")
-      .select("id,user_id,audio_path")
-      .eq("id", data.sessionId)
-      .maybeSingle();
+    // Per-user daily cap to bound third-party spend if credentials leak.
+    const DAILY_CAP = 20;
+    try {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: usage } = await supabaseAdmin
+        .from("diarize_usage")
+        .select("count")
+        .eq("user_id", userId)
+        .eq("day", today)
+        .maybeSingle();
+      const current = (usage?.count as number | undefined) ?? 0;
+      if (current >= DAILY_CAP) {
+        return {
+          ok: false as const,
+          error: `Daily diarization limit reached (${DAILY_CAP}/day). Try again tomorrow.`,
+        };
+      }
+      await supabaseAdmin
+        .from("diarize_usage")
+        .upsert(
+          { user_id: userId, day: today, count: current + 1, updated_at: new Date().toISOString() },
+          { onConflict: "user_id,day" },
+        );
+    } catch (e) {
+      console.error("[diarize] usage-counter check failed", e);
+      // fail closed on quota bookkeeping errors
+      return { ok: false as const, error: "Could not verify usage quota." };
+    }
     if (sErr) return { ok: false as const, error: sErr.message };
     if (!session?.audio_path) {
       return { ok: false as const, error: "No audio uploaded for this session yet." };
