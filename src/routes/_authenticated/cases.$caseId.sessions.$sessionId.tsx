@@ -25,6 +25,7 @@ import { formatTime, formatDate } from "@/lib/format";
 import { saveCache, loadCache, clearCache } from "@/lib/idb";
 import type { Bookmark, TranscriptSegment } from "@/lib/types";
 import { exportTranscriptDocx, downloadBlob } from "@/lib/export";
+import { ConsentDialog, consent } from "@/components/ConsentDialog";
 
 export const Route = createFileRoute("/_authenticated/cases/$caseId/sessions/$sessionId")({
   component: SessionPage,
@@ -66,6 +67,7 @@ function SessionPage() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [diarizing, setDiarizing] = useState(false);
   const [permissionDialog, setPermissionDialog] = useState(false);
+  const [consentDialog, setConsentDialog] = useState(false);
   const [auditRows, setAuditRows] = useState<Array<{ id: string; action: "insert" | "update"; actor_user_id: string | null; changed_fields: string[]; occurred_at: string }>>([]);
   const diarize = useServerFn(diarizeSession);
   const updateSessionFn = useServerFn(updateSession);
@@ -168,7 +170,7 @@ function SessionPage() {
     return () => clearInterval(t);
   }, [sessionId, caseId, transcript, bookmarks, recorder.blob, recorder.mimeType]);
 
-  const startRec = async () => {
+  const beginRecording = async () => {
     if (!isSecure) {
       toast.error("Microphone requires a secure (HTTPS) context.");
       return;
@@ -191,6 +193,13 @@ function SessionPage() {
       return;
     }
     if (recorder.error) toast.error(recorder.error);
+  };
+  const startRec = async () => {
+    if (!consent.granted()) {
+      setConsentDialog(true);
+      return;
+    }
+    await beginRecording();
   };
   const pauseRec = () => { recorder.pause(); sr.stop(); };
   const resumeRec = () => {
@@ -584,6 +593,11 @@ function SessionPage() {
         onOpenChange={setPermissionDialog}
         browser={browserHint}
         onRetry={() => { setPermissionDialog(false); startRec(); }}
+      />
+      <ConsentDialog
+        open={consentDialog}
+        onConfirm={() => { consent.grant(); setConsentDialog(false); void beginRecording(); }}
+        onCancel={() => setConsentDialog(false)}
       />
     </div>
   );

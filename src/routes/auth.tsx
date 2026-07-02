@@ -14,10 +14,12 @@ export const Route = createFileRoute("/auth")({
   head: () => ({ meta: [{ title: "Sign in — myJuris" }] }),
 });
 
+type Mode = "signin" | "signup" | "forgot";
+
 function AuthPage() {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -37,6 +39,13 @@ function AuthPage() {
         });
         if (error) throw error;
         toast.success("Account created. Check your email to confirm.");
+      } else if (mode === "forgot") {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/reset-password`,
+        });
+        if (error) throw error;
+        toast.success("Password reset email sent. Check your inbox.");
+        setMode("signin");
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -47,6 +56,15 @@ function AuthPage() {
       toast.error(err instanceof Error ? err.message : "Authentication failed");
     } finally { setBusy(false); }
   };
+
+  const heading =
+    mode === "signin" ? "Sign in" :
+    mode === "signup" ? "Create your account" :
+    "Reset your password";
+  const subheading =
+    mode === "signin" ? "Access your case archive." :
+    mode === "signup" ? "Begin recording in minutes." :
+    "We'll email you a link to choose a new password.";
 
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
@@ -74,27 +92,43 @@ function AuthPage() {
       <div className="flex items-center justify-center p-6 sm:p-12">
         <Card className="w-full max-w-md p-8 shadow-elevated">
           <div className="mb-6">
-            <h2 className="text-2xl font-semibold tracking-tight">{mode === "signin" ? "Sign in" : "Create your account"}</h2>
-            <p className="text-sm text-muted-foreground mt-1">{mode === "signin" ? "Access your case archive." : "Begin recording in minutes."}</p>
+            <h2 className="text-2xl font-semibold tracking-tight">{heading}</h2>
+            <p className="text-sm text-muted-foreground mt-1">{subheading}</p>
           </div>
           <form onSubmit={submit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
               <Input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="clerk@court.gov" />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input id="password" type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
-            </div>
+            {mode !== "forgot" && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="password">Password</Label>
+                  {mode === "signin" && (
+                    <button type="button" className="text-xs text-primary hover:underline" onClick={() => setMode("forgot")}>
+                      Forgot password?
+                    </button>
+                  )}
+                </div>
+                <Input id="password" type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+              </div>
+            )}
             <Button type="submit" disabled={busy} className="w-full">
-              {busy ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}
+              {busy ? "Please wait…" :
+                mode === "signin" ? "Sign in" :
+                mode === "signup" ? "Create account" :
+                "Send reset link"}
             </Button>
           </form>
           <div className="mt-6 text-sm text-muted-foreground text-center">
-            {mode === "signin" ? (
+            {mode === "signin" && (
               <>New here? <button type="button" className="text-primary hover:underline" onClick={() => setMode("signup")}>Create an account</button></>
-            ) : (
+            )}
+            {mode === "signup" && (
               <>Already registered? <button type="button" className="text-primary hover:underline" onClick={() => setMode("signin")}>Sign in</button></>
+            )}
+            {mode === "forgot" && (
+              <button type="button" className="text-primary hover:underline" onClick={() => setMode("signin")}>Back to sign in</button>
             )}
           </div>
         </Card>
