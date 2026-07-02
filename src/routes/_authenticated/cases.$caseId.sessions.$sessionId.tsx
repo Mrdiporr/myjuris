@@ -594,6 +594,11 @@ function SessionPage() {
         browser={browserHint}
         onRetry={() => { setPermissionDialog(false); startRec(); }}
       />
+      <ConsentDialog
+        open={consentDialog}
+        onConfirm={() => { consent.grant(); setConsentDialog(false); void beginRecording(); }}
+        onCancel={() => setConsentDialog(false)}
+      />
     </div>
   );
 }
