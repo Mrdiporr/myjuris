@@ -378,10 +378,23 @@ function SessionPage() {
                 <AlertCircle className="size-4 mt-0.5 shrink-0" /><span>{recorder.error}</span>
               </div>
             )}
-            {!sr.supported && (
-              <div className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
-                <AlertCircle className="size-4 mt-0.5 shrink-0" />
-                <span>Live transcription requires a Chromium‑based browser (Chrome, Edge). Audio recording still works.</span>
+            {(!sr.supported || browserHint === "firefox" || browserHint === "safari") && (
+              <div className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs text-foreground/90">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="size-4 mt-0.5 shrink-0 text-warning" />
+                  <div className="space-y-1">
+                    <p className="font-medium">
+                      {browserHint === "firefox" && "Firefox has limited recording support"}
+                      {browserHint === "safari" && "Safari has limited recording support"}
+                      {browserHint !== "firefox" && browserHint !== "safari" && "Live transcription not supported on this browser"}
+                    </p>
+                    <p className="text-muted-foreground">
+                      {browserHint === "firefox" && "Firefox does not support the Web Speech API used for live transcription. Audio recording will still work, and you can run AI diarization on the recorded audio afterwards. For live captions, use Chrome or Edge."}
+                      {browserHint === "safari" && "Safari's microphone and speech features can behave inconsistently. Live transcription is unavailable; audio recording works but may require re-granting mic permission each session. For best results, use Chrome or Edge on desktop."}
+                      {browserHint !== "firefox" && browserHint !== "safari" && "Live transcription requires a Chromium‑based browser (Chrome, Edge). Audio recording still works and AI diarization can be run afterwards."}
+                    </p>
+                  </div>
+                </div>
               </div>
             )}
             {audioUrl && recordingState !== "recording" && (
