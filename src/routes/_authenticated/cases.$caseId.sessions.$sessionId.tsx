@@ -72,6 +72,7 @@ function SessionPage() {
   const diarize = useServerFn(diarizeSession);
   const updateSessionFn = useServerFn(updateSession);
   const fetchAudit = useServerFn(listSessionAudit);
+  const logExportFn = useServerFn(logExport);
 
   const isSecure = typeof window !== "undefined" ? window.isSecureContext : true;
   const browserHint = (() => {
