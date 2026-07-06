@@ -106,3 +106,50 @@ export const listSessionAudit = createServerFn({ method: "GET" })
       occurred_at: string;
     }> };
   });
+
+export const logExport = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input) =>
+    z.object({
+      sessionId: z.string().uuid(),
+      caseId: z.string().uuid(),
+      kind: z.enum(["transcript_docx", "audio"]),
+      filename: z.string().trim().min(1).max(255),
+    }).parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    await assertCaseOwnership(supabase as never, data.caseId, userId);
+    const { error } = await supabase
+      .from("export_audit_log")
+      .insert({
+        session_id: data.sessionId,
+        case_id: data.caseId,
+        actor_user_id: userId,
+        kind: data.kind,
+        filename: data.filename,
+      } as never);
+    if (error) throw new Error(error.message);
+    return { ok: true as const };
+  });
+
+export const listExportAudit = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input) => z.object({ sessionId: z.string().uuid() }).parse(input))
+  .handler(async ({ data, context }) => {
+    const { supabase } = context;
+    const { data: rows, error } = await supabase
+      .from("export_audit_log")
+      .select("id,kind,filename,actor_user_id,occurred_at")
+      .eq("session_id", data.sessionId)
+      .order("occurred_at", { ascending: false })
+      .limit(50);
+    if (error) throw new Error(error.message);
+    return { rows: (rows ?? []) as Array<{
+      id: string;
+      kind: "transcript_docx" | "audio";
+      filename: string;
+      actor_user_id: string;
+      occurred_at: string;
+    }> };
+  });

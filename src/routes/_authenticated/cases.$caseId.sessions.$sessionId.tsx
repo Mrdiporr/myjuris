@@ -6,7 +6,7 @@ import {
   Download, FileText, AlertCircle, CheckCircle2, Save, UserCircle, Sparkles, ShieldAlert, Activity,
 } from "lucide-react";
 import { diarizeSession } from "@/lib/diarize.functions";
-import { updateSession, listSessionAudit } from "@/lib/sessions.functions";
+import { updateSession, listSessionAudit, logExport } from "@/lib/sessions.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { useRecorder } from "@/hooks/useRecorder";
@@ -72,6 +72,7 @@ function SessionPage() {
   const diarize = useServerFn(diarizeSession);
   const updateSessionFn = useServerFn(updateSession);
   const fetchAudit = useServerFn(listSessionAudit);
+  const logExportFn = useServerFn(logExport);
 
   const isSecure = typeof window !== "undefined" ? window.isSecureContext : true;
   const browserHint = (() => {
@@ -295,20 +296,28 @@ function SessionPage() {
       durationSeconds: Math.round(durationRef.current || session.duration_seconds),
       transcript, bookmarks,
     });
-    downloadBlob(blob, `${caseRow.suit_number}_${session.title}.docx`.replace(/\s+/g, "_"));
+    const filename = `${caseRow.suit_number}_${session.title}.docx`.replace(/\s+/g, "_");
+    downloadBlob(blob, filename);
+    try {
+      await logExportFn({ data: { sessionId, caseId, kind: "transcript_docx", filename } });
+    } catch { /* non-fatal */ }
   };
 
   const exportAudio = async () => {
     const blob = recorder.blob;
+    let filename: string | null = null;
     if (blob) {
       const ext = (recorder.mimeType?.includes("mp4") ? "m4a" : "webm");
-      downloadBlob(blob, `${caseRow?.suit_number ?? "session"}_${sessionId}.${ext}`);
-      return;
-    }
-    if (audioUrl) {
-      const a = document.createElement("a"); a.href = audioUrl; a.download = `${caseRow?.suit_number ?? "session"}.audio`;
+      filename = `${caseRow?.suit_number ?? "session"}_${sessionId}.${ext}`;
+      downloadBlob(blob, filename);
+    } else if (audioUrl) {
+      filename = `${caseRow?.suit_number ?? "session"}.audio`;
+      const a = document.createElement("a"); a.href = audioUrl; a.download = filename;
       document.body.appendChild(a); a.click(); a.remove();
-    } else { toast.error("No audio available"); }
+    } else { toast.error("No audio available"); return; }
+    try {
+      await logExportFn({ data: { sessionId, caseId, kind: "audio", filename } });
+    } catch { /* non-fatal */ }
   };
 
   const recordingState = recorder.state;
@@ -369,10 +378,23 @@ function SessionPage() {
                 <AlertCircle className="size-4 mt-0.5 shrink-0" /><span>{recorder.error}</span>
               </div>
             )}
-            {!sr.supported && (
-              <div className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
-                <AlertCircle className="size-4 mt-0.5 shrink-0" />
-                <span>Live transcription requires a Chromium‑based browser (Chrome, Edge). Audio recording still works.</span>
+            {(!sr.supported || browserHint === "firefox" || browserHint === "safari") && (
+              <div className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs text-foreground/90">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="size-4 mt-0.5 shrink-0 text-warning" />
+                  <div className="space-y-1">
+                    <p className="font-medium">
+                      {browserHint === "firefox" && "Firefox has limited recording support"}
+                      {browserHint === "safari" && "Safari has limited recording support"}
+                      {browserHint !== "firefox" && browserHint !== "safari" && "Live transcription not supported on this browser"}
+                    </p>
+                    <p className="text-muted-foreground">
+                      {browserHint === "firefox" && "Firefox does not support the Web Speech API used for live transcription. Audio recording will still work, and you can run AI diarization on the recorded audio afterwards. For live captions, use Chrome or Edge."}
+                      {browserHint === "safari" && "Safari's microphone and speech features can behave inconsistently. Live transcription is unavailable; audio recording works but may require re-granting mic permission each session. For best results, use Chrome or Edge on desktop."}
+                      {browserHint !== "firefox" && browserHint !== "safari" && "Live transcription requires a Chromium‑based browser (Chrome, Edge). Audio recording still works and AI diarization can be run afterwards."}
+                    </p>
+                  </div>
+                </div>
               </div>
             )}
             {audioUrl && recordingState !== "recording" && (
