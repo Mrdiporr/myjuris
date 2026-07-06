@@ -558,7 +558,7 @@ function SessionPage() {
                     <DropdownMenuItem onClick={exportDocx}><FileText className="size-4" /> Transcript (.docx)</DropdownMenuItem>
                     <DropdownMenuItem onClick={exportAudio}><Mic className="size-4" /> Audio file</DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={async () => { await exportDocx(); await exportAudio(); }}>Both</DropdownMenuItem>
+                    <DropdownMenuItem onClick={exportBoth}>Both</DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
