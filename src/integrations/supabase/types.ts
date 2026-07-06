@@ -71,6 +71,51 @@ export type Database = {
         }
         Relationships: []
       }
+      export_audit_log: {
+        Row: {
+          actor_user_id: string
+          case_id: string
+          filename: string
+          id: string
+          kind: string
+          occurred_at: string
+          session_id: string
+        }
+        Insert: {
+          actor_user_id: string
+          case_id: string
+          filename: string
+          id?: string
+          kind: string
+          occurred_at?: string
+          session_id: string
+        }
+        Update: {
+          actor_user_id?: string
+          case_id?: string
+          filename?: string
+          id?: string
+          kind?: string
+          occurred_at?: string
+          session_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "export_audit_log_case_id_fkey"
+            columns: ["case_id"]
+            isOneToOne: false
+            referencedRelation: "cases"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "export_audit_log_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       session_audit_log: {
         Row: {
           action: string
