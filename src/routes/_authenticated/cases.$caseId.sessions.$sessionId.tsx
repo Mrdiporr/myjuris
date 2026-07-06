@@ -288,36 +288,84 @@ function SessionPage() {
   };
 
   const exportDocx = async () => {
-    if (!caseRow || !session) return;
-    const blob = await exportTranscriptDocx({
-      caseName: caseRow.case_name, suitNumber: caseRow.suit_number,
-      parties: `${caseRow.plaintiff} vs. ${caseRow.defendant}`,
-      sessionTitle: session.title, startedAt: session.started_at,
-      durationSeconds: Math.round(durationRef.current || session.duration_seconds),
-      transcript, bookmarks,
+    if (!caseRow || !session) {
+      toast.error("Session not ready to export");
+      return;
+    }
+    const toastId = toast.loading("Generating transcript document…", {
+      description: "Building .docx from live transcript and bookmarks.",
     });
-    const filename = `${caseRow.suit_number}_${session.title}.docx`.replace(/\s+/g, "_");
-    downloadBlob(blob, filename);
     try {
-      await logExportFn({ data: { sessionId, caseId, kind: "transcript_docx", filename } });
-    } catch { /* non-fatal */ }
+      const blob = await exportTranscriptDocx({
+        caseName: caseRow.case_name, suitNumber: caseRow.suit_number,
+        parties: `${caseRow.plaintiff} vs. ${caseRow.defendant}`,
+        sessionTitle: session.title, startedAt: session.started_at,
+        durationSeconds: Math.round(durationRef.current || session.duration_seconds),
+        transcript, bookmarks,
+      });
+      const filename = `${caseRow.suit_number}_${session.title}.docx`.replace(/\s+/g, "_");
+      downloadBlob(blob, filename);
+      toast.success("Transcript downloaded", { id: toastId, description: filename });
+      try {
+        await logExportFn({ data: { sessionId, caseId, kind: "transcript_docx", filename } });
+      } catch (e) {
+        console.error("[export] audit log failed", e);
+        toast.warning("Export saved, but audit log failed", {
+          description: "The file downloaded. Retry later so this export is recorded.",
+        });
+      }
+    } catch (e) {
+      toast.error("Transcript export failed", {
+        id: toastId,
+        description: e instanceof Error ? e.message : "Could not build .docx",
+      });
+    }
   };
 
   const exportAudio = async () => {
     const blob = recorder.blob;
-    let filename: string | null = null;
-    if (blob) {
-      const ext = (recorder.mimeType?.includes("mp4") ? "m4a" : "webm");
-      filename = `${caseRow?.suit_number ?? "session"}_${sessionId}.${ext}`;
-      downloadBlob(blob, filename);
-    } else if (audioUrl) {
-      filename = `${caseRow?.suit_number ?? "session"}.audio`;
-      const a = document.createElement("a"); a.href = audioUrl; a.download = filename;
-      document.body.appendChild(a); a.click(); a.remove();
-    } else { toast.error("No audio available"); return; }
+    if (!blob && !audioUrl) {
+      toast.error("No audio available", { description: "Record or upload audio first." });
+      return;
+    }
+    const toastId = toast.loading("Preparing audio download…", {
+      description: blob ? "Packaging local recording." : "Fetching audio from secure storage.",
+    });
     try {
-      await logExportFn({ data: { sessionId, caseId, kind: "audio", filename } });
-    } catch { /* non-fatal */ }
+      let filename: string;
+      if (blob) {
+        const ext = recorder.mimeType?.includes("mp4") ? "m4a" : "webm";
+        filename = `${caseRow?.suit_number ?? "session"}_${sessionId}.${ext}`;
+        downloadBlob(blob, filename);
+      } else {
+        filename = `${caseRow?.suit_number ?? "session"}.audio`;
+        const a = document.createElement("a");
+        a.href = audioUrl!;
+        a.download = filename;
+        document.body.appendChild(a); a.click(); a.remove();
+      }
+      toast.success("Audio downloaded", { id: toastId, description: filename });
+      try {
+        await logExportFn({ data: { sessionId, caseId, kind: "audio", filename } });
+      } catch (e) {
+        console.error("[export] audit log failed", e);
+        toast.warning("Export saved, but audit log failed", {
+          description: "The file downloaded. Retry later so this export is recorded.",
+        });
+      }
+    } catch (e) {
+      toast.error("Audio export failed", {
+        id: toastId,
+        description: e instanceof Error ? e.message : "Could not prepare audio",
+      });
+    }
+  };
+
+  const exportBoth = async () => {
+    const toastId = toast.loading("Exporting transcript and audio…");
+    await exportDocx();
+    await exportAudio();
+    toast.success("Export bundle complete", { id: toastId });
   };
 
   const recordingState = recorder.state;
@@ -510,7 +558,7 @@ function SessionPage() {
                     <DropdownMenuItem onClick={exportDocx}><FileText className="size-4" /> Transcript (.docx)</DropdownMenuItem>
                     <DropdownMenuItem onClick={exportAudio}><Mic className="size-4" /> Audio file</DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={async () => { await exportDocx(); await exportAudio(); }}>Both</DropdownMenuItem>
+                    <DropdownMenuItem onClick={exportBoth}>Both</DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
