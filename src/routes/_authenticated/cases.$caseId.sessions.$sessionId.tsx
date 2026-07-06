@@ -296,20 +296,28 @@ function SessionPage() {
       durationSeconds: Math.round(durationRef.current || session.duration_seconds),
       transcript, bookmarks,
     });
-    downloadBlob(blob, `${caseRow.suit_number}_${session.title}.docx`.replace(/\s+/g, "_"));
+    const filename = `${caseRow.suit_number}_${session.title}.docx`.replace(/\s+/g, "_");
+    downloadBlob(blob, filename);
+    try {
+      await logExportFn({ data: { sessionId, caseId, kind: "transcript_docx", filename } });
+    } catch { /* non-fatal */ }
   };
 
   const exportAudio = async () => {
     const blob = recorder.blob;
+    let filename: string | null = null;
     if (blob) {
       const ext = (recorder.mimeType?.includes("mp4") ? "m4a" : "webm");
-      downloadBlob(blob, `${caseRow?.suit_number ?? "session"}_${sessionId}.${ext}`);
-      return;
-    }
-    if (audioUrl) {
-      const a = document.createElement("a"); a.href = audioUrl; a.download = `${caseRow?.suit_number ?? "session"}.audio`;
+      filename = `${caseRow?.suit_number ?? "session"}_${sessionId}.${ext}`;
+      downloadBlob(blob, filename);
+    } else if (audioUrl) {
+      filename = `${caseRow?.suit_number ?? "session"}.audio`;
+      const a = document.createElement("a"); a.href = audioUrl; a.download = filename;
       document.body.appendChild(a); a.click(); a.remove();
-    } else { toast.error("No audio available"); }
+    } else { toast.error("No audio available"); return; }
+    try {
+      await logExportFn({ data: { sessionId, caseId, kind: "audio", filename } });
+    } catch { /* non-fatal */ }
   };
 
   const recordingState = recorder.state;
