@@ -191,10 +191,12 @@ export function useRecorder(): RecorderHook {
         resolve(null);
         return;
       }
+      // Capture recorder state BEFORE calling stop() so pause→stop accounting is correct.
+      const wasRecording = rec.state === "recording";
       rec.onstop = () => {
         const out = new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" });
         setBlob(out);
-        if (state === "recording") {
+        if (wasRecording) {
           accumulatedRef.current += (Date.now() - startedAtRef.current) / 1000;
         }
         setDuration(accumulatedRef.current);
@@ -204,7 +206,7 @@ export function useRecorder(): RecorderHook {
       };
       rec.stop();
     });
-  }, [cleanup, state]);
+  }, [cleanup]);
 
   const reset = useCallback(() => {
     cleanup();

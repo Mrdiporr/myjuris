@@ -42,7 +42,10 @@ export interface LiveTranscriptHook {
   start: (offsetMs: () => number) => void;
   stop: () => void;
   reset: () => void;
+  retry: () => void;
 }
+
+const MAX_RESTARTS = 10;
 
 export function useSpeechRecognition(): LiveTranscriptHook {
   const [supported, setSupported] = useState(false);
@@ -53,6 +56,7 @@ export function useSpeechRecognition(): LiveTranscriptHook {
   const recRef = useRef<SpeechRecognitionLike | null>(null);
   const offsetFnRef = useRef<() => number>(() => 0);
   const wantActiveRef = useRef(false);
+  const restartCountRef = useRef(0);
 
   useEffect(() => { setSupported(getSR() !== null); }, []);
 
@@ -61,11 +65,13 @@ export function useSpeechRecognition(): LiveTranscriptHook {
     if (!SR) { setError("Live transcription not supported in this browser. Try Chrome."); return; }
     offsetFnRef.current = offsetMs;
     wantActiveRef.current = true;
+    restartCountRef.current = 0;
     const rec = new SR();
     rec.continuous = true;
     rec.interimResults = true;
     rec.lang = navigator.language || "en-US";
     rec.onresult = (e) => {
+      restartCountRef.current = 0; // reset backoff whenever we get real output
       let interimText = "";
       const newFinals: { text: string; timeMs: number }[] = [];
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -82,10 +88,14 @@ export function useSpeechRecognition(): LiveTranscriptHook {
       setError(ev.error);
     };
     rec.onend = () => {
-      // Auto-restart if user still wants it active (browsers stop ~60s)
-      if (wantActiveRef.current) {
+      // Bounded auto-restart (browsers cut off ~60s of continuous listening).
+      if (wantActiveRef.current && restartCountRef.current < MAX_RESTARTS) {
+        restartCountRef.current += 1;
         try { rec.start(); } catch { setActive(false); }
       } else {
+        if (wantActiveRef.current && restartCountRef.current >= MAX_RESTARTS) {
+          setError("Live captions stopped after repeated restarts. Use Retry to resume.");
+        }
         setActive(false);
       }
     };
@@ -101,5 +111,12 @@ export function useSpeechRecognition(): LiveTranscriptHook {
 
   const reset = useCallback(() => { setInterim(""); setFinals([]); setError(null); }, []);
 
-  return { supported, active, interim, finals, error, start, stop, reset };
+  const retry = useCallback(() => {
+    // Re-start using the last offset function; caller sets a new one via start() if needed.
+    setError(null);
+    restartCountRef.current = 0;
+    start(offsetFnRef.current);
+  }, [start]);
+
+  return { supported, active, interim, finals, error, start, stop, reset, retry };
 }
