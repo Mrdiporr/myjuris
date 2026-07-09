@@ -89,7 +89,69 @@ function SessionPage() {
     return "other";
   })();
 
+  /**
+   * saveAudioBlob — contract:
+   *   Responsibility: upload the recording blob to Supabase Storage, persist
+   *     the audio path + metadata via updateSession, refresh the signed URL,
+   *     and clear the local IndexedDB cache. Single upload pathway; safe to
+   *     call from stopRec, from a retry action, or from runDiarization when a
+   *     local blob exists but no audio_path is set yet.
+   *   Guarantees: never uploads twice concurrently (uploadingRef); on failure
+   *     preserves the in-memory blob so retry is safe.
+   */
+  const saveAudioBlob = async (blob: Blob): Promise<{ path: string; signedUrl: string | null }> => {
+    if (!user) throw new Error("Not signed in");
+    if (uploadingRef.current) throw new Error("Upload already in progress");
+    uploadingRef.current = true;
+    try {
+      setPersisting(true);
+      const ext = (recorder.mimeType?.includes("mp4") ? "m4a" : recorder.mimeType?.includes("ogg") ? "ogg" : "webm");
+      const path = `${user.id}/${sessionId}.${ext}`;
+      const { error: upErr } = await supabase.storage.from("session-audio").upload(path, blob, {
+        contentType: recorder.mimeType ?? "audio/webm", upsert: true,
+      });
+      if (upErr) throw upErr;
+      await updateSessionFn({
+        data: {
+          sessionId,
+          caseId,
+          patch: {
+            audio_path: path,
+            audio_mime: recorder.mimeType ?? null,
+            duration_seconds: Math.round(durationRef.current),
+            transcript: transcript as unknown[],
+            bookmarks: bookmarks as unknown[],
+            ended_at: new Date().toISOString(),
+          },
+        },
+      });
+      const { data: signed } = await supabase.storage.from("session-audio").createSignedUrl(path, 3600);
+      const signedUrl = signed?.signedUrl ?? null;
+      if (signedUrl) setAudioUrl(signedUrl);
+      await clearCache(sessionId);
+      return { path, signedUrl };
+    } finally {
+      uploadingRef.current = false;
+      setPersisting(false);
+    }
+  };
+
   const runDiarization = async () => {
+    // Auto-upload path: if a local blob exists but no audio_path is persisted,
+    // upload first so the server function has something to diarize.
+    if (!session?.audio_path && recorder.blob) {
+      const uploadTid = toast.loading("Uploading audio before diarization…");
+      try {
+        await saveAudioBlob(recorder.blob);
+        toast.success("Audio uploaded", { id: uploadTid });
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Upload failed", {
+          id: uploadTid,
+          action: { label: "Retry", onClick: () => void runDiarization() },
+        });
+        return;
+      }
+    }
     setDiarizing(true);
     const tid = toast.loading("Running speaker diarization…");
     try {
@@ -98,10 +160,16 @@ function SessionPage() {
         setTranscript(res.segments as TranscriptSegment[]);
         toast.success(`Diarization complete · ${res.segments.length} segments`, { id: tid });
       } else {
-        toast.error(res.error, { id: tid });
+        toast.error(res.error, {
+          id: tid,
+          action: { label: "Retry", onClick: () => void runDiarization() },
+        });
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Diarization failed", { id: tid });
+      toast.error(e instanceof Error ? e.message : "Diarization failed", {
+        id: tid,
+        action: { label: "Retry", onClick: () => void runDiarization() },
+      });
     } finally {
       setDiarizing(false);
     }
