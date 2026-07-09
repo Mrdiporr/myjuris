@@ -369,7 +369,6 @@ function SessionPage() {
     }
     exportJob.run(kind);
   };
-  };
 
   const recordingState = recorder.state;
   const isRecording = recordingState === "recording";
