@@ -24,8 +24,9 @@ import { toast } from "sonner";
 import { formatTime, formatDate } from "@/lib/format";
 import { saveCache, loadCache, clearCache } from "@/lib/idb";
 import type { Bookmark, TranscriptSegment } from "@/lib/types";
-import { exportTranscriptDocx, downloadBlob } from "@/lib/export";
 import { ConsentDialog, consent } from "@/components/ConsentDialog";
+import { usePlaybackUrl } from "@/hooks/usePlaybackUrl";
+import { useExportJob, type ExportKind } from "@/hooks/useExportJob";
 
 export const Route = createFileRoute("/_authenticated/cases/$caseId/sessions/$sessionId")({
   component: SessionPage,
