@@ -248,75 +248,60 @@ function SessionPage() {
       toast.error("Microphone requires a secure (HTTPS) context.");
       return;
     }
-    // Start speech recognition synchronously inside the click gesture
-    // (browsers revoke gesture context after the awaited getUserMedia call).
-    if (sr.supported) {
-      try { sr.start(() => durationRef.current * 1000); } catch { /* surfaced via sr.error */ }
-    }
+    // Start the recorder FIRST so a SpeechRecognition failure never blocks capture.
     try {
       await recorder.start();
     } catch (e) {
-      sr.stop();
       const msg = e instanceof Error ? e.message : "Could not start microphone";
-      if (/denied|permission/i.test(msg)) {
-        setPermissionDialog(true);
-      } else {
-        toast.error(msg);
-      }
+      if (/denied|permission/i.test(msg)) setPermissionDialog(true);
+      else toast.error(msg);
       return;
+    }
+    // Then attempt live captions (best-effort — Firefox/Safari will no-op).
+    if (sr.supported) {
+      try { sr.start(() => durationRef.current * 1000); } catch { /* surfaced via sr.error */ }
     }
     if (recorder.error) toast.error(recorder.error);
   };
-  const startRec = async () => {
+  const startRec = () => {
     if (!consent.granted()) {
       setConsentDialog(true);
       return;
     }
-    await beginRecording();
+    // Keep synchronous inside the click gesture — do not await.
+    void beginRecording();
   };
   const pauseRec = () => { recorder.pause(); sr.stop(); };
   const resumeRec = () => {
+    recorder.resume();
     if (sr.supported) {
       try { sr.start(() => durationRef.current * 1000); } catch { /* ignore */ }
     }
-    recorder.resume();
   };
   const stopRec = async () => {
     sr.stop();
     const blob = await recorder.stop();
     if (blob && user) {
       try {
-        setPersisting(true);
-        const ext = (recorder.mimeType?.includes("mp4") ? "m4a" : recorder.mimeType?.includes("ogg") ? "ogg" : "webm");
-        const path = `${user.id}/${sessionId}.${ext}`;
-        const { error: upErr } = await supabase.storage.from("session-audio").upload(path, blob, {
-          contentType: recorder.mimeType ?? "audio/webm", upsert: true,
-        });
-        if (upErr) throw upErr;
-        await updateSessionFn({
-          data: {
-            sessionId,
-            caseId,
-            patch: {
-              audio_path: path,
-              audio_mime: recorder.mimeType ?? null,
-              duration_seconds: Math.round(durationRef.current),
-              transcript: transcript as unknown[],
-              bookmarks: bookmarks as unknown[],
-              ended_at: new Date().toISOString(),
-            },
-          },
-        });
-        const { data: signed } = await supabase.storage.from("session-audio").createSignedUrl(path, 3600);
-        if (signed?.signedUrl) setAudioUrl(signed.signedUrl);
-        await clearCache(sessionId);
+        await saveAudioBlob(blob);
         toast.success("Session saved");
         loadAudit();
         // Kick off real speaker diarization in the background.
-        runDiarization();
+        void runDiarization();
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Failed to save");
-      } finally { setPersisting(false); }
+        const msg = e instanceof Error ? e.message : "Failed to save";
+        toast.error(msg, {
+          action: {
+            label: "Retry",
+            onClick: () => {
+              if (recorder.blob) void saveAudioBlob(recorder.blob).then(() => {
+                toast.success("Session saved");
+                loadAudit();
+              }).catch((err) => toast.error(err instanceof Error ? err.message : "Retry failed"));
+            },
+          },
+        });
+      }
     }
   };
 
@@ -359,85 +344,31 @@ function SessionPage() {
     }
   };
 
-  const exportDocx = async () => {
-    if (!caseRow || !session) {
+  // Export job — single toast surface with progress, retry, and cancel.
+  const exportJob = useExportJob(() => ({
+    caseRow,
+    session: session ? { id: session.id, title: session.title, started_at: session.started_at, duration_seconds: session.duration_seconds } : null,
+    transcript,
+    bookmarks,
+    durationSeconds: durationRef.current,
+    sessionId,
+    caseId,
+    blob: recorder.blob,
+    mimeType: recorder.mimeType,
+    audioUrl,
+    logExport: logExportFn,
+  }));
+  const runExport = (kind: ExportKind) => {
+    if (kind !== "audio" && (!caseRow || !session)) {
       toast.error("Session not ready to export");
       return;
     }
-    const toastId = toast.loading("Generating transcript document…", {
-      description: "Building .docx from live transcript and bookmarks.",
-    });
-    try {
-      const blob = await exportTranscriptDocx({
-        caseName: caseRow.case_name, suitNumber: caseRow.suit_number,
-        parties: `${caseRow.plaintiff} vs. ${caseRow.defendant}`,
-        sessionTitle: session.title, startedAt: session.started_at,
-        durationSeconds: Math.round(durationRef.current || session.duration_seconds),
-        transcript, bookmarks,
-      });
-      const filename = `${caseRow.suit_number}_${session.title}.docx`.replace(/\s+/g, "_");
-      downloadBlob(blob, filename);
-      toast.success("Transcript downloaded", { id: toastId, description: filename });
-      try {
-        await logExportFn({ data: { sessionId, caseId, kind: "transcript_docx", filename } });
-      } catch (e) {
-        console.error("[export] audit log failed", e);
-        toast.warning("Export saved, but audit log failed", {
-          description: "The file downloaded. Retry later so this export is recorded.",
-        });
-      }
-    } catch (e) {
-      toast.error("Transcript export failed", {
-        id: toastId,
-        description: e instanceof Error ? e.message : "Could not build .docx",
-      });
-    }
-  };
-
-  const exportAudio = async () => {
-    const blob = recorder.blob;
-    if (!blob && !audioUrl) {
+    if (kind !== "docx" && !recorder.blob && !audioUrl) {
       toast.error("No audio available", { description: "Record or upload audio first." });
       return;
     }
-    const toastId = toast.loading("Preparing audio download…", {
-      description: blob ? "Packaging local recording." : "Fetching audio from secure storage.",
-    });
-    try {
-      let filename: string;
-      if (blob) {
-        const ext = recorder.mimeType?.includes("mp4") ? "m4a" : "webm";
-        filename = `${caseRow?.suit_number ?? "session"}_${sessionId}.${ext}`;
-        downloadBlob(blob, filename);
-      } else {
-        filename = `${caseRow?.suit_number ?? "session"}.audio`;
-        const a = document.createElement("a");
-        a.href = audioUrl!;
-        a.download = filename;
-        document.body.appendChild(a); a.click(); a.remove();
-      }
-      toast.success("Audio downloaded", { id: toastId, description: filename });
-      try {
-        await logExportFn({ data: { sessionId, caseId, kind: "audio", filename } });
-      } catch (e) {
-        console.error("[export] audit log failed", e);
-        toast.warning("Export saved, but audit log failed", {
-          description: "The file downloaded. Retry later so this export is recorded.",
-        });
-      }
-    } catch (e) {
-      toast.error("Audio export failed", {
-        id: toastId,
-        description: e instanceof Error ? e.message : "Could not prepare audio",
-      });
-    }
+    exportJob.run(kind);
   };
-
-  const exportBoth = async () => {
-    const toastId = toast.loading("Exporting transcript and audio…");
-    await exportDocx();
-    await exportAudio();
-    toast.success("Export bundle complete", { id: toastId });
   };
 
   const recordingState = recorder.state;
