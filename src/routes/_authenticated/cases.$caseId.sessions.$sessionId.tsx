@@ -447,8 +447,8 @@ function SessionPage() {
                 </div>
               </div>
             )}
-            {audioUrl && recordingState !== "recording" && (
-              <audio controls src={audioUrl} className="w-full mt-4" />
+            {playbackUrl && recordingState !== "recording" && (
+              <audio controls src={playbackUrl} className="w-full mt-4" />
             )}
           </Card>
 
@@ -557,10 +557,10 @@ function SessionPage() {
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <DropdownMenuLabel>Download</DropdownMenuLabel>
-                    <DropdownMenuItem onClick={exportDocx}><FileText className="size-4" /> Transcript (.docx)</DropdownMenuItem>
-                    <DropdownMenuItem onClick={exportAudio}><Mic className="size-4" /> Audio file</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => runExport("docx")}><FileText className="size-4" /> Transcript (.docx)</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => runExport("audio")}><Mic className="size-4" /> Audio file</DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={exportBoth}>Both</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => runExport("both")}>Both</DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
