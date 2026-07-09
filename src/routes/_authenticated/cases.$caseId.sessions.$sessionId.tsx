@@ -75,6 +75,9 @@ function SessionPage() {
   const fetchAudit = useServerFn(listSessionAudit);
   const logExportFn = useServerFn(logExport);
 
+  const playbackUrl = usePlaybackUrl(audioUrl, recorder.blob);
+  const uploadingRef = useRef(false);
+
   const isSecure = typeof window !== "undefined" ? window.isSecureContext : true;
   const browserHint = (() => {
     if (typeof navigator === "undefined") return "";
