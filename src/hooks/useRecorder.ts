@@ -28,7 +28,12 @@ function pickMime(): string {
   return "audio/webm";
 }
 
-export function useRecorder(): RecorderHook {
+export interface RecorderOptions {
+  /** Called for every chunk emitted by MediaRecorder, so callers can stream to durable storage. */
+  onChunk?: (blob: Blob, index: number, mime: string) => void;
+}
+
+export function useRecorder(options: RecorderOptions = {}): RecorderHook {
   const [state, setState] = useState<RecorderState>("idle");
   const [durationSeconds, setDuration] = useState(0);
   const [level, setLevel] = useState(0);
@@ -56,6 +61,8 @@ export function useRecorder(): RecorderHook {
   const mediaRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
+  const onChunkRef = useRef(options.onChunk);
+  onChunkRef.current = options.onChunk;
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -117,7 +124,11 @@ export function useRecorder(): RecorderHook {
       setMime(mime);
 
       rec.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
+        if (e.data.size > 0) {
+          const index = chunksRef.current.length;
+          chunksRef.current.push(e.data);
+          try { onChunkRef.current?.(e.data, index, mime); } catch { /* durable-cache failure must never stop capture */ }
+        }
       };
       rec.onstop = () => {
         const out = new Blob(chunksRef.current, { type: mime });

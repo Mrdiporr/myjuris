@@ -22,7 +22,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { formatTime, formatDate } from "@/lib/format";
-import { saveCache, loadCache, clearCache } from "@/lib/idb";
+import { saveCache, loadCache, clearCache, appendChunk, loadChunkBlob, clearChunks } from "@/lib/idb";
 import type { Bookmark, TranscriptSegment } from "@/lib/types";
 import { ConsentDialog, consent } from "@/components/ConsentDialog";
 import { usePlaybackUrl } from "@/hooks/usePlaybackUrl";
@@ -53,7 +53,11 @@ function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toS
 function SessionPage() {
   const { caseId, sessionId } = Route.useParams();
   const { user } = useAuth();
-  const recorder = useRecorder();
+  // Stream every recorder chunk straight into IndexedDB so a refresh mid-recording
+  // never loses captured audio.
+  const recorder = useRecorder({
+    onChunk: (blob, index, mime) => { void appendChunk(sessionId, index, blob, mime).catch(() => {}); },
+  });
   const sr = useSpeechRecognition();
 
   const [loading, setLoading] = useState(true);
@@ -69,14 +73,22 @@ function SessionPage() {
   const [diarizing, setDiarizing] = useState(false);
   const [permissionDialog, setPermissionDialog] = useState(false);
   const [consentDialog, setConsentDialog] = useState(false);
+  const [recovered, setRecovered] = useState<{ blob: Blob; mime: string } | null>(null);
+  const [editingSpeaker, setEditingSpeaker] = useState<{ id: string; original: string; value: string } | null>(null);
   const [auditRows, setAuditRows] = useState<Array<{ id: string; action: "insert" | "update"; actor_user_id: string | null; changed_fields: string[]; occurred_at: string }>>([]);
   const diarize = useServerFn(diarizeSession);
   const updateSessionFn = useServerFn(updateSession);
   const fetchAudit = useServerFn(listSessionAudit);
   const logExportFn = useServerFn(logExport);
 
-  const playbackUrl = usePlaybackUrl(audioUrl, recorder.blob);
+  // Effective audio source: live recording blob first, then anything recovered
+  // from the durable IndexedDB chunk cache.
+  const localBlob = recorder.blob ?? recovered?.blob ?? null;
+  const localMime = recorder.mimeType ?? recovered?.mime ?? null;
+
+  const playbackUrl = usePlaybackUrl(audioUrl, localBlob);
   const uploadingRef = useRef(false);
+  const segmentRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const isSecure = typeof window !== "undefined" ? window.isSecureContext : true;
   const browserHint = (() => {
@@ -99,16 +111,23 @@ function SessionPage() {
    *   Guarantees: never uploads twice concurrently (uploadingRef); on failure
    *     preserves the in-memory blob so retry is safe.
    */
-  const saveAudioBlob = async (blob: Blob): Promise<{ path: string; signedUrl: string | null }> => {
+  const saveAudioBlob = async (blob: Blob, mimeOverride?: string): Promise<{ path: string; signedUrl: string | null }> => {
     if (!user) throw new Error("Not signed in");
     if (uploadingRef.current) throw new Error("Upload already in progress");
     uploadingRef.current = true;
     try {
       setPersisting(true);
-      const ext = (recorder.mimeType?.includes("mp4") ? "m4a" : recorder.mimeType?.includes("ogg") ? "ogg" : "webm");
+      const mime = mimeOverride ?? localMime ?? "audio/webm";
+      const ext = (mime.includes("mp4") ? "m4a" : mime.includes("ogg") ? "ogg" : "webm");
       const path = `${user.id}/${sessionId}.${ext}`;
+      // Mark the cached copy as pending until the upload is confirmed.
+      await saveCache({
+        id: sessionId, caseId, transcript, bookmarks,
+        durationSeconds: durationRef.current, audioMime: mime,
+        updatedAt: Date.now(), uploadState: "pending",
+      }).catch(() => {});
       const { error: upErr } = await supabase.storage.from("session-audio").upload(path, blob, {
-        contentType: recorder.mimeType ?? "audio/webm", upsert: true,
+        contentType: mime, upsert: true,
       });
       if (upErr) throw upErr;
       await updateSessionFn({
@@ -117,7 +136,7 @@ function SessionPage() {
           caseId,
           patch: {
             audio_path: path,
-            audio_mime: recorder.mimeType ?? null,
+            audio_mime: mime,
             duration_seconds: Math.round(durationRef.current),
             transcript: transcript as unknown[],
             bookmarks: bookmarks as unknown[],
@@ -128,7 +147,10 @@ function SessionPage() {
       const { data: signed } = await supabase.storage.from("session-audio").createSignedUrl(path, 3600);
       const signedUrl = signed?.signedUrl ?? null;
       if (signedUrl) setAudioUrl(signedUrl);
+      // Only drop the durable cache after a confirmed successful upload.
       await clearCache(sessionId);
+      setRecovered(null);
+      setSession((prev) => (prev ? { ...prev, audio_path: path, audio_mime: mime } : prev));
       return { path, signedUrl };
     } finally {
       uploadingRef.current = false;
@@ -139,10 +161,10 @@ function SessionPage() {
   const runDiarization = async () => {
     // Auto-upload path: if a local blob exists but no audio_path is persisted,
     // upload first so the server function has something to diarize.
-    if (!session?.audio_path && recorder.blob) {
+    if (!session?.audio_path && localBlob) {
       const uploadTid = toast.loading("Uploading audio before diarization…");
       try {
-        await saveAudioBlob(recorder.blob);
+        await saveAudioBlob(localBlob);
         toast.success("Audio uploaded", { id: uploadTid });
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Upload failed", {
@@ -175,8 +197,9 @@ function SessionPage() {
     }
   };
 
+  const [restoredDuration, setRestoredDuration] = useState(0);
   const durationRef = useRef(0);
-  durationRef.current = recorder.durationSeconds;
+  durationRef.current = recorder.durationSeconds || restoredDuration;
 
   // Load session + case
   useEffect(() => {
@@ -187,8 +210,8 @@ function SessionPage() {
         supabase.from("cases").select("id,case_name,suit_number,plaintiff,defendant").eq("id", caseId).maybeSingle(),
       ]);
       if (se) toast.error(se.message);
-      if (s) {
-        const row = s as unknown as SessionRow;
+      const row = s ? (s as unknown as SessionRow) : null;
+      if (row) {
         setSession(row);
         setTranscript((row.transcript as TranscriptSegment[]) ?? []);
         setBookmarks((row.bookmarks as Bookmark[]) ?? []);
@@ -200,10 +223,26 @@ function SessionPage() {
       setCaseRow((c as CaseRow) ?? null);
       // Try local cache restore (only if cloud has no transcript yet)
       const cached = await loadCache(sessionId);
-      if (cached && (!s || ((s as unknown as SessionRow).transcript ?? []).length === 0)) {
+      if (cached && (!row || (row.transcript ?? []).length === 0)) {
         if (cached.transcript.length) setTranscript(cached.transcript as TranscriptSegment[]);
         if (cached.bookmarks.length) setBookmarks(cached.bookmarks as Bookmark[]);
+        if (cached.durationSeconds) setRestoredDuration(cached.durationSeconds);
         toast.info("Restored unsaved data from local cache.");
+      }
+      // Recover streamed audio chunks (e.g. after a refresh mid-recording).
+      if (!row?.audio_path) {
+        const chunked = await loadChunkBlob(sessionId);
+        if (chunked && chunked.blob.size > 0) {
+          setRecovered(chunked);
+          if (!cached?.durationSeconds && row?.duration_seconds) setRestoredDuration(row.duration_seconds);
+          toast.warning("Unfinished recording recovered from this device", {
+            description: "The audio was never uploaded. Use “Finish upload” to save it to the cloud.",
+            duration: 10000,
+          });
+        }
+      } else {
+        // Cloud copy exists — the durable chunk cache is redundant.
+        void clearChunks(sessionId).catch(() => {});
       }
       setLoading(false);
     })();
@@ -228,7 +267,8 @@ function SessionPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sr.finals]);
 
-  // Auto-save to IndexedDB
+  // Auto-save to IndexedDB (transcript/flags/duration; audio itself is streamed
+  // chunk-by-chunk by the recorder's onChunk hook).
   useEffect(() => {
     const t = setInterval(() => {
       saveCache({
@@ -236,18 +276,22 @@ function SessionPage() {
         transcript, bookmarks,
         durationSeconds: durationRef.current,
         audioBlob: recorder.blob ?? undefined,
-        audioMime: recorder.mimeType ?? undefined,
+        audioMime: localMime ?? undefined,
         updatedAt: Date.now(),
+        uploadState: session?.audio_path ? "uploaded" : (recorder.blob || recovered) ? "pending" : "none",
       }).then(() => setSavedAt(Date.now())).catch(() => {});
     }, 5000);
     return () => clearInterval(t);
-  }, [sessionId, caseId, transcript, bookmarks, recorder.blob, recorder.mimeType]);
+  }, [sessionId, caseId, transcript, bookmarks, recorder.blob, localMime, recovered, session?.audio_path]);
 
   const beginRecording = async () => {
     if (!isSecure) {
       toast.error("Microphone requires a secure (HTTPS) context.");
       return;
     }
+    // Discard any stale chunk cache so a new take cannot be mixed with an old one.
+    setRecovered(null);
+    void clearChunks(sessionId).catch(() => {});
     // Start the recorder FIRST so a SpeechRecognition failure never blocks capture.
     try {
       await recorder.start();
@@ -312,6 +356,42 @@ function SessionPage() {
     toast.success(`Flagged at ${formatTime(durationRef.current)}`);
   };
 
+  /** Upload a recovered (never-uploaded) recording from the durable cache. */
+  const finishUpload = async () => {
+    if (!localBlob) return;
+    const tid = toast.loading("Uploading recovered recording…");
+    try {
+      await saveAudioBlob(localBlob);
+      toast.success("Recording uploaded", { id: tid });
+      loadAudit();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Upload failed", {
+        id: tid,
+        action: { label: "Retry", onClick: () => void finishUpload() },
+      });
+    }
+  };
+
+  /** Rename the speaker on one segment, or on every segment sharing the label. */
+  const applySpeakerRename = (segmentId: string, original: string, next: string, allMatching: boolean) => {
+    const label = next.trim();
+    if (!label || label === original) { setEditingSpeaker(null); return; }
+    setTranscript((prev) =>
+      prev.map((s) =>
+        allMatching ? (s.speaker === original ? { ...s, speaker: label } : s) : (s.id === segmentId ? { ...s, speaker: label } : s),
+      ),
+    );
+    setEditingSpeaker(null);
+    toast.success(allMatching ? `Renamed “${original}” → “${label}” everywhere` : `Speaker updated`);
+  };
+
+  const scrollToTime = (timeMs: number) => {
+    // Jump to the transcript segment closest to (and not after) the flag.
+    const target = [...transcript].sort((a, b) => a.startMs - b.startMs).filter((s) => s.startMs <= timeMs).pop() ?? transcript[0];
+    const el = target ? segmentRefs.current[target.id] : null;
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
   const loadAudit = async () => {
     try {
       const { rows } = await fetchAudit({ data: { sessionId } });
@@ -353,8 +433,8 @@ function SessionPage() {
     durationSeconds: durationRef.current,
     sessionId,
     caseId,
-    blob: recorder.blob,
-    mimeType: recorder.mimeType,
+    blob: localBlob,
+    mimeType: localMime,
     audioUrl,
     logExport: logExportFn,
   }));
@@ -363,7 +443,7 @@ function SessionPage() {
       toast.error("Session not ready to export");
       return;
     }
-    if (kind !== "docx" && !recorder.blob && !audioUrl) {
+    if (kind !== "docx" && !localBlob && !audioUrl) {
       toast.error("No audio available", { description: "Record or upload audio first." });
       return;
     }
@@ -378,6 +458,18 @@ function SessionPage() {
   const interimDisplay = sr.interim;
 
   const sortedBookmarks = useMemo(() => [...bookmarks].sort((a, b) => a.timeMs - b.timeMs), [bookmarks]);
+
+  // Transcript + flags merged into one chronological stream.
+  type TimelineItem =
+    | { kind: "segment"; time: number; seg: TranscriptSegment }
+    | { kind: "flag"; time: number; flag: Bookmark };
+  const timeline = useMemo<TimelineItem[]>(() => {
+    const items: TimelineItem[] = [
+      ...transcript.map((s) => ({ kind: "segment" as const, time: s.startMs, seg: s })),
+      ...bookmarks.map((b) => ({ kind: "flag" as const, time: b.timeMs, flag: b })),
+    ];
+    return items.sort((a, b) => a.time - b.time);
+  }, [transcript, bookmarks]);
 
   if (loading) return <div className="grid place-items-center py-20"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>;
 
@@ -445,6 +537,20 @@ function SessionPage() {
                     </p>
                   </div>
                 </div>
+              </div>
+            )}
+            {recovered && !session?.audio_path && (
+              <div className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs flex flex-wrap items-center gap-3">
+                <AlertCircle className="size-4 text-warning shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">Recovered recording pending upload</p>
+                  <p className="text-muted-foreground">
+                    {(recovered.blob.size / (1024 * 1024)).toFixed(1)} MB restored from this device. It is not yet in the cloud.
+                  </p>
+                </div>
+                <Button size="sm" onClick={finishUpload} disabled={persisting}>
+                  {persisting ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />} Finish upload
+                </Button>
               </div>
             )}
             {playbackUrl && recordingState !== "recording" && (
@@ -572,15 +678,48 @@ function SessionPage() {
                     {isRecording ? "Listening… speak to populate the transcript." : "Press Record to begin capturing audio and live transcription."}
                   </div>
                 )}
-                {transcript.map((seg) => (
-                  <div key={seg.id} className="group">
-                    <div className="flex items-baseline gap-2 mb-0.5">
-                      <span className="text-[11px] font-mono text-primary tabular-nums">{formatTime(seg.startMs / 1000)}</span>
-                      <span className="text-xs font-medium text-foreground/90">{seg.speaker}</span>
+                {timeline.map((item) =>
+                  item.kind === "flag" ? (
+                    <div
+                      key={`flag-${item.flag.id}`}
+                      id={`flag-${item.flag.id}`}
+                      className="flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-1.5"
+                    >
+                      <Flag className="size-3.5 text-warning shrink-0" />
+                      <span className="text-[11px] font-mono tabular-nums text-warning shrink-0">{formatTime(item.time / 1000)}</span>
+                      <span className="text-xs break-words">{item.flag.label}</span>
                     </div>
-                    <p className="text-sm leading-relaxed text-foreground/95 pl-1">{seg.text}</p>
-                  </div>
-                ))}
+                  ) : (
+                    <div
+                      key={item.seg.id}
+                      ref={(el) => { segmentRefs.current[item.seg.id] = el; }}
+                      className="group"
+                    >
+                      <div className="flex items-baseline gap-2 mb-0.5">
+                        <span className="text-[11px] font-mono text-primary tabular-nums">{formatTime(item.seg.startMs / 1000)}</span>
+                        {editingSpeaker?.id === item.seg.id ? (
+                          <SpeakerEditor
+                            value={editingSpeaker.value}
+                            onChange={(v: string) => setEditingSpeaker((s) => (s ? { ...s, value: v } : s))}
+                            onCancel={() => setEditingSpeaker(null)}
+                            onSave={(all: boolean) => applySpeakerRename(item.seg.id, editingSpeaker!.original, editingSpeaker!.value, all)}
+                          />
+
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setEditingSpeaker({ id: item.seg.id, original: item.seg.speaker, value: item.seg.speaker })}
+                            className="text-xs font-medium text-foreground/90 rounded px-1 -mx-1 hover:bg-muted hover:text-primary transition-colors"
+                            title="Click to rename this speaker"
+                          >
+                            {item.seg.speaker}
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-sm leading-relaxed text-foreground/95 pl-1">{item.seg.text}</p>
+                    </div>
+                  ),
+                )}
                 {interimDisplay && (
                   <div>
                     <div className="text-[11px] font-mono text-muted-foreground tabular-nums mb-0.5">{formatTime(durationRef.current)}</div>
@@ -607,8 +746,14 @@ function SessionPage() {
                 <ul className="space-y-2">
                   {sortedBookmarks.map((b) => (
                     <li key={b.id} className="flex items-start gap-3 p-2.5 rounded-md bg-muted/40 border border-border">
-                      <span className="mt-0.5 text-[11px] font-mono tabular-nums text-warning shrink-0">{formatTime(b.timeMs / 1000)}</span>
-                      <span className="text-sm flex-1 break-words">{b.label}</span>
+                      <button
+                        onClick={() => scrollToTime(b.timeMs)}
+                        className="flex items-start gap-3 flex-1 text-left min-w-0"
+                        title="Jump to this point in the transcript"
+                      >
+                        <span className="mt-0.5 text-[11px] font-mono tabular-nums text-warning shrink-0">{formatTime(b.timeMs / 1000)}</span>
+                        <span className="text-sm flex-1 break-words">{b.label}</span>
+                      </button>
                       <button onClick={() => setBookmarks((p) => p.filter((x) => x.id !== b.id))} className="text-xs text-muted-foreground hover:text-destructive">×</button>
                     </li>
                   ))}
@@ -672,6 +817,29 @@ function SessionPage() {
         onCancel={() => setConsentDialog(false)}
       />
     </div>
+  );
+}
+
+function SpeakerEditor({
+  value, onChange, onSave, onCancel,
+}: { value: string; onChange: (v: string) => void; onSave: (allMatching: boolean) => void; onCancel: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Input
+        autoFocus
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); onSave(e.shiftKey); }
+          if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+        }}
+        className="h-6 w-[190px] text-xs px-2"
+        placeholder="e.g. Judge Adeyemi"
+      />
+      <Button size="sm" variant="secondary" className="h-6 px-2 text-[11px]" onClick={() => onSave(false)}>This one</Button>
+      <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => onSave(true)}>All</Button>
+      <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={onCancel}>Cancel</Button>
+    </span>
   );
 }
 
