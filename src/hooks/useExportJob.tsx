@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, CheckCircle2, XCircle, RotateCw, X } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, RotateCw, X, Ban } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { exportTranscriptDocx, downloadBlob } from "@/lib/export";
@@ -15,6 +15,7 @@ type Stage =
   | "downloading"
   | "logging_audit"
   | "done"
+  | "cancelled"
   | "error";
 
 const STAGE_LABEL: Record<Stage, string> = {
@@ -24,6 +25,7 @@ const STAGE_LABEL: Record<Stage, string> = {
   downloading: "Downloading…",
   logging_audit: "Recording audit entry…",
   done: "Complete",
+  cancelled: "Cancelled — nothing was exported",
   error: "Failed",
 };
 
@@ -42,7 +44,7 @@ export interface ExportContext {
 }
 
 interface JobState {
-  status: "idle" | "running" | "done" | "error";
+  status: "idle" | "running" | "done" | "cancelled" | "error";
   kind: ExportKind | null;
   stage: Stage;
   percent: number;
@@ -82,6 +84,7 @@ export function useExportJob(getContext: () => ExportContext) {
         <div className="flex items-center gap-2 mb-2">
           {snapshot.status === "running" && <Loader2 className="size-4 animate-spin text-primary" />}
           {snapshot.status === "done" && <CheckCircle2 className="size-4 text-success" />}
+          {snapshot.status === "cancelled" && <Ban className="size-4 text-muted-foreground" />}
           {snapshot.status === "error" && <XCircle className="size-4 text-destructive" />}
           <div className="text-sm font-medium">
             {snapshot.kind === "docx" && "Transcript export"}
@@ -98,7 +101,7 @@ export function useExportJob(getContext: () => ExportContext) {
             {snapshot.status === "error" ? (snapshot.error ?? "Failed") : STAGE_LABEL[snapshot.stage]}
           </span>
           <div className="flex items-center gap-1">
-            {snapshot.status === "error" && (
+            {(snapshot.status === "error" || snapshot.status === "cancelled") && (
               <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={retry}>
                 <RotateCw className="size-3" /> Retry
               </Button>
@@ -108,7 +111,7 @@ export function useExportJob(getContext: () => ExportContext) {
                 <X className="size-3" /> Cancel
               </Button>
             )}
-            {(snapshot.status === "done" || snapshot.status === "error") && (
+            {snapshot.status !== "running" && snapshot.status !== "idle" && (
               <Button
                 size="sm"
                 variant="ghost"
@@ -237,12 +240,15 @@ export function useExportJob(getContext: () => ExportContext) {
         setState(finalState);
         renderToast(finalState, retry, cancel);
       } catch (e) {
-        const isCancel = e instanceof DOMException && e.name === "AbortError";
-        const message = isCancel ? "Cancelled" : e instanceof Error ? e.message : "Export failed";
-        const finalState: JobState = { status: "error", kind, stage: "error", percent: 0, error: message };
+        const isCancel = (e instanceof DOMException && e.name === "AbortError") || controller.signal.aborted;
+        const finalState: JobState = isCancel
+          ? { status: "cancelled", kind, stage: "cancelled", percent: 0 }
+          : { status: "error", kind, stage: "error", percent: 0, error: e instanceof Error ? e.message : "Export failed" };
         setState(finalState);
         renderToast(finalState, retry, cancel);
       } finally {
+        // Release the guard immediately so Retry can start a fresh job with no
+        // possibility of the aborted one resuming or producing a duplicate file.
         runningRef.current = false;
         cancelRef.current = null;
       }
