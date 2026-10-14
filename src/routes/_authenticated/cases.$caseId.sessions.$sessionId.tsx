@@ -30,6 +30,13 @@ import { useExportJob, type ExportKind } from "@/hooks/useExportJob";
 
 export const Route = createFileRoute("/_authenticated/cases/$caseId/sessions/$sessionId")({
   component: SessionPage,
+  head: () => ({ meta: [
+    { title: "Session recording & court-ready exports — myJuris" },
+    { name: "description", content: "Record proceedings, review speaker-labelled transcripts and export a court-ready PDF session bundle." },
+    { property: "og:title", content: "Session recording & court-ready exports — myJuris" },
+    { property: "og:description", content: "Review recordings, timestamped transcripts and bookmarked moments in myJuris." },
+    { property: "og:type", content: "website" }, { name: "twitter:card", content: "summary" },
+  ] }),
 });
 
 interface SessionRow {
@@ -443,7 +450,7 @@ function SessionPage() {
       toast.error("Session not ready to export");
       return;
     }
-    if (kind !== "docx" && !localBlob && !audioUrl) {
+    if ((kind === "audio" || kind === "both") && !localBlob && !audioUrl) {
       toast.error("No audio available", { description: "Record or upload audio first." });
       return;
     }
@@ -659,10 +666,12 @@ function SessionPage() {
                 <Button size="sm" variant="ghost" onClick={saveTranscriptOnly} disabled={persisting}><Save className="size-4" /> Save</Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button size="sm" variant="outline"><Download className="size-4" /> Export</Button>
+                    <Button size="sm" variant="outline" disabled={exportJob.state.status === "running"}><Download className="size-4" /> Export</Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <DropdownMenuLabel>Download</DropdownMenuLabel>
+                    <DropdownMenuItem onClick={() => runExport("pdf")}><FileText className="size-4" /> Court-ready bundle (.pdf)</DropdownMenuItem>
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => runExport("docx")}><FileText className="size-4" /> Transcript (.docx)</DropdownMenuItem>
                     <DropdownMenuItem onClick={() => runExport("audio")}><Mic className="size-4" /> Audio file</DropdownMenuItem>
                     <DropdownMenuSeparator />

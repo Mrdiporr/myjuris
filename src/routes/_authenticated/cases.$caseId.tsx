@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, useChildMatches, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useState } from "react";
 import { ArrowLeft, Mic, Clock, FileText, Loader2 } from "lucide-react";
@@ -13,8 +13,20 @@ import { formatDate, formatTime } from "@/lib/format";
 import type { CaseStatus } from "@/lib/types";
 
 export const Route = createFileRoute("/_authenticated/cases/$caseId")({
-  component: CaseDetail,
+  head: () => ({ meta: [
+    { title: 'Case sessions — myJuris' },
+    { name: "description", content: 'Review case details, recordings and session transcripts in myJuris.' },
+    { property: "og:title", content: 'Case sessions — myJuris' },
+    { property: "og:description", content: 'Review case details, recordings and session transcripts in myJuris.' },
+    { property: "og:type", content: "website" }, { name: "twitter:card", content: "summary" },
+  ] }),
+  component: CaseRoute,
 });
+
+function CaseRoute() {
+  const children = useChildMatches();
+  return children.length > 0 ? <Outlet /> : <CaseDetail />;
+}
 
 interface CaseRow {
   id: string;

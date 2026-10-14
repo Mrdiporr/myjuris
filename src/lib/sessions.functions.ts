@@ -113,7 +113,7 @@ export const logExport = createServerFn({ method: "POST" })
     z.object({
       sessionId: z.string().uuid(),
       caseId: z.string().uuid(),
-      kind: z.enum(["transcript_docx", "audio"]),
+      kind: z.enum(["transcript_docx", "transcript_pdf", "audio"]),
       filename: z.string().trim().min(1).max(255),
     }).parse(input),
   )
@@ -147,7 +147,7 @@ export const listExportAudit = createServerFn({ method: "GET" })
     if (error) throw new Error(error.message);
     return { rows: (rows ?? []) as Array<{
       id: string;
-      kind: "transcript_docx" | "audio";
+      kind: "transcript_docx" | "transcript_pdf" | "audio";
       filename: string;
       actor_user_id: string;
       occurred_at: string;

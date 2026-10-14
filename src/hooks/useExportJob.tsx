@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { exportTranscriptDocx, downloadBlob } from "@/lib/export";
 import type { Bookmark, TranscriptSegment } from "@/lib/types";
 
-export type ExportKind = "docx" | "audio" | "both";
+export type ExportKind = "pdf" | "docx" | "audio" | "both";
 
 type Stage =
   | "preparing"
@@ -15,6 +15,7 @@ type Stage =
   | "downloading"
   | "logging_audit"
   | "done"
+  | "ready"
   | "cancelled"
   | "error";
 
@@ -25,6 +26,7 @@ const STAGE_LABEL: Record<Stage, string> = {
   downloading: "Downloading…",
   logging_audit: "Recording audit entry…",
   done: "Complete",
+  ready: "PDF ready to download",
   cancelled: "Cancelled — nothing was exported",
   error: "Failed",
 };
@@ -40,11 +42,11 @@ export interface ExportContext {
   blob: Blob | null;
   mimeType: string | null;
   audioUrl: string | null;
-  logExport: (args: { data: { sessionId: string; caseId: string; kind: "audio" | "transcript_docx"; filename: string } }) => Promise<unknown>;
+  logExport: (args: { data: { sessionId: string; caseId: string; kind: "audio" | "transcript_docx" | "transcript_pdf"; filename: string } }) => Promise<unknown>;
 }
 
 interface JobState {
-  status: "idle" | "running" | "done" | "cancelled" | "error";
+  status: "idle" | "running" | "ready" | "done" | "cancelled" | "error";
   kind: ExportKind | null;
   stage: Stage;
   percent: number;
@@ -75,6 +77,21 @@ export function useExportJob(getContext: () => ExportContext) {
   const runningRef = useRef(false);
   const cancelRef = useRef<AbortController | null>(null);
   const toastIdRef = useRef<string | number | null>(null);
+  const preparedRef = useRef<{ blob: Blob; filename: string; ctx: ExportContext } | null>(null);
+
+  const downloadPdf = useCallback(() => {
+    const prepared = preparedRef.current;
+    if (!prepared) return;
+    preparedRef.current = null;
+    downloadBlob(prepared.blob, prepared.filename);
+    setState({ status: "done", kind: "pdf", stage: "done", percent: 100 });
+    if (toastIdRef.current != null) toast.dismiss(toastIdRef.current);
+    toast.success("PDF download started", { description: prepared.filename });
+    void prepared.ctx.logExport({ data: {
+      sessionId: prepared.ctx.sessionId, caseId: prepared.ctx.caseId,
+      kind: "transcript_pdf", filename: prepared.filename,
+    } }).catch(() => toast.warning("PDF downloaded, but audit log failed"));
+  }, []);
 
   const renderToast = useCallback((snapshot: JobState, retry: () => void, cancel: () => void) => {
     const id = toastIdRef.current ?? `export-job-${Date.now()}`;
@@ -87,6 +104,7 @@ export function useExportJob(getContext: () => ExportContext) {
           {snapshot.status === "cancelled" && <Ban className="size-4 text-muted-foreground" />}
           {snapshot.status === "error" && <XCircle className="size-4 text-destructive" />}
           <div className="text-sm font-medium">
+            {snapshot.kind === "pdf" && "Court-ready PDF bundle"}
             {snapshot.kind === "docx" && "Transcript export"}
             {snapshot.kind === "audio" && "Audio export"}
             {snapshot.kind === "both" && "Bundle export"}
@@ -101,6 +119,9 @@ export function useExportJob(getContext: () => ExportContext) {
             {snapshot.status === "error" ? (snapshot.error ?? "Failed") : STAGE_LABEL[snapshot.stage]}
           </span>
           <div className="flex items-center gap-1">
+            {snapshot.status === "ready" && (
+              <Button size="sm" className="h-7 px-2 text-xs" onClick={downloadPdf}>Download PDF</Button>
+            )}
             {(snapshot.status === "error" || snapshot.status === "cancelled") && (
               <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={retry}>
                 <RotateCw className="size-3" /> Retry
@@ -119,6 +140,7 @@ export function useExportJob(getContext: () => ExportContext) {
                 onClick={() => {
                   if (toastIdRef.current != null) toast.dismiss(toastIdRef.current);
                   toastIdRef.current = null;
+                   preparedRef.current = null;
                 }}
               >
                 Close
@@ -130,7 +152,7 @@ export function useExportJob(getContext: () => ExportContext) {
     );
     toast.custom(() => body, { id, duration: snapshot.status === "done" ? 2500 : Infinity });
     return id;
-  }, []);
+  }, [downloadPdf]);
 
   const setAndRender = useCallback(
     (next: JobState, retry: () => void, cancel: () => void) => {
@@ -193,7 +215,8 @@ export function useExportJob(getContext: () => ExportContext) {
         filename = `${ctx.caseRow?.suit_number ?? "session"}.audio`;
         setAndRender({ status: "running", kind: state.kind, stage: "downloading", percent: base + span * 0.7 }, retry, cancel);
         const a = document.createElement("a");
-        a.href = ctx.audioUrl!;
+        if (!ctx.audioUrl) throw new Error("No audio available");
+        a.href = ctx.audioUrl;
         a.download = filename;
         document.body.appendChild(a);
         a.click();
@@ -215,10 +238,10 @@ export function useExportJob(getContext: () => ExportContext) {
     async (kind: ExportKind) => {
       if (runningRef.current) return;
       runningRef.current = true;
+      preparedRef.current = null;
       const controller = new AbortController();
       cancelRef.current = controller;
       const retry = () => {
-        runningRef.current = false;
         void runInternal(kind);
       };
       const cancel = () => {
@@ -228,6 +251,28 @@ export function useExportJob(getContext: () => ExportContext) {
       setState({ status: "running", kind, stage: "preparing", percent: 5 });
       renderToast({ status: "running", kind, stage: "preparing", percent: 5 }, retry, cancel);
       try {
+        if (kind === "pdf") {
+          const ctx = getContext();
+          if (!ctx.caseRow || !ctx.session) throw new Error("Session not ready to export");
+          const { exportSessionPdf } = await import("@/lib/export-pdf");
+          checkCancel(controller.signal);
+          const blob = await exportSessionPdf({
+            caseName: ctx.caseRow.case_name, suitNumber: ctx.caseRow.suit_number,
+            parties: `${ctx.caseRow.plaintiff} vs. ${ctx.caseRow.defendant}`,
+            sessionTitle: ctx.session.title, sessionId: ctx.sessionId,
+            startedAt: ctx.session.started_at,
+            durationSeconds: Math.round(ctx.durationSeconds || ctx.session.duration_seconds),
+            transcript: ctx.transcript, bookmarks: ctx.bookmarks,
+          }, {
+            signal: controller.signal,
+            onProgress: percent => setAndRender({ status: "running", kind, stage: "building_document", percent }, retry, cancel),
+          });
+          checkCancel(controller.signal);
+          const stem = `${ctx.caseRow.suit_number}_${ctx.session.title}`.replace(/[^\p{L}\p{N}._-]+/gu, "_").slice(0, 180);
+          preparedRef.current = { blob, filename: `${stem}_court_bundle.pdf`, ctx };
+          setAndRender({ status: "ready", kind, stage: "ready", percent: 100 }, retry, cancel);
+          return;
+        }
         if (kind === "docx") {
           await doDocx(controller.signal, 0, 100, retry, cancel);
         } else if (kind === "audio") {
@@ -253,7 +298,7 @@ export function useExportJob(getContext: () => ExportContext) {
         cancelRef.current = null;
       }
     },
-    [doDocx, doAudio, renderToast],
+    [doDocx, doAudio, renderToast, getContext, setAndRender],
   );
 
   const run = useCallback((kind: ExportKind) => void runInternal(kind), [runInternal]);

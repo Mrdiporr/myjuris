@@ -1,0 +1,2 @@
+ALTER TABLE public.export_audit_log DROP CONSTRAINT IF EXISTS export_audit_log_kind_check;
+ALTER TABLE public.export_audit_log ADD CONSTRAINT export_audit_log_kind_check CHECK (kind IN ('transcript_docx', 'transcript_pdf', 'audio'));

@@ -10,7 +10,13 @@ import { toast } from "sonner";
 
 export const Route = createFileRoute("/reset-password")({
   component: ResetPasswordPage,
-  head: () => ({ meta: [{ title: "Reset password — myJuris" }] }),
+  head: () => ({ meta: [
+    { title: 'Reset password — myJuris' },
+    { name: "description", content: 'Reset your myJuris account password securely.' },
+    { property: "og:title", content: 'Reset password — myJuris' },
+    { property: "og:description", content: 'Reset your myJuris account password securely.' },
+    { property: "og:type", content: "website" }, { name: "twitter:card", content: "summary" },
+  ] }),
 });
 
 function ResetPasswordPage() {
