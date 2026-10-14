@@ -11,7 +11,13 @@ import { toast } from "sonner";
 
 export const Route = createFileRoute("/auth")({
   component: AuthPage,
-  head: () => ({ meta: [{ title: "Sign in — myJuris" }] }),
+  head: () => ({ meta: [
+    { title: 'Sign in — myJuris' },
+    { name: "description", content: 'Sign in to your secure myJuris case and recording workspace.' },
+    { property: "og:title", content: 'Sign in — myJuris' },
+    { property: "og:description", content: 'Sign in to your secure myJuris case and recording workspace.' },
+    { property: "og:type", content: "website" }, { name: "twitter:card", content: "summary" },
+  ] }),
 });
 
 type Mode = "signin" | "signup" | "forgot";

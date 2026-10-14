@@ -2,7 +2,7 @@ import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } fro
 import type { Bookmark, TranscriptSegment } from "./types";
 import { formatTime } from "./format";
 
-interface ExportArgs {
+export interface ExportArgs {
   caseName: string;
   suitNumber: string;
   parties: string;
@@ -11,6 +11,7 @@ interface ExportArgs {
   durationSeconds: number;
   transcript: TranscriptSegment[];
   bookmarks: Bookmark[];
+  sessionId?: string;
 }
 
 export async function exportTranscriptDocx(a: ExportArgs): Promise<Blob> {
@@ -75,5 +76,5 @@ export function downloadBlob(blob: Blob, filename: string) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
