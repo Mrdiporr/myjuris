@@ -118,7 +118,7 @@ function SessionPage() {
    *   Guarantees: never uploads twice concurrently (uploadingRef); on failure
    *     preserves the in-memory blob so retry is safe.
    */
-  const saveAudioBlob = async (blob: Blob, mimeOverride?: string): Promise<{ path: string; signedUrl: string | null }> => {
+  const saveAudioBlob = async (blob: Blob, mimeOverride?: string): Promise<{ path: string }> => {
     if (!user) throw new Error("Not signed in");
     if (uploadingRef.current) throw new Error("Upload already in progress");
     uploadingRef.current = true;
@@ -156,7 +156,7 @@ function SessionPage() {
       await clearCache(sessionId);
       setRecovered(null);
       setSession((prev) => (prev ? { ...prev, audio_path: path, audio_mime: mime } : prev));
-      return { path, signedUrl: null };
+      return { path };
     } finally {
       uploadingRef.current = false;
       setPersisting(false);
