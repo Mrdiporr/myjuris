@@ -156,7 +156,7 @@ function SessionPage() {
       await clearCache(sessionId);
       setRecovered(null);
       setSession((prev) => (prev ? { ...prev, audio_path: path, audio_mime: mime } : prev));
-      return { path, signedUrl };
+      return { path, signedUrl: null };
     } finally {
       uploadingRef.current = false;
       setPersisting(false);
