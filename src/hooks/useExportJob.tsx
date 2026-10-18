@@ -41,7 +41,6 @@ export interface ExportContext {
   caseId: string;
   blob: Blob | null;
   mimeType: string | null;
-  audioUrl: string | null;
   logExport: (args: { data: { sessionId: string; caseId: string; kind: "audio" | "transcript_docx" | "transcript_pdf"; filename: string } }) => Promise<unknown>;
 }
 
@@ -202,26 +201,14 @@ export function useExportJob(getContext: () => ExportContext) {
   const doAudio = useCallback(
     async (signal: AbortSignal, base: number, span: number, retry: () => void, cancel: () => void) => {
       const ctx = getContext();
-      if (!ctx.blob && !ctx.audioUrl) throw new Error("No audio available — record or upload audio first.");
+      if (!ctx.blob) throw new Error("No audio available — record or upload audio first.");
       setAndRender({ status: "running", kind: state.kind, stage: "packaging_audio", percent: base + span * 0.1 }, retry, cancel);
       checkCancel(signal);
       let filename: string;
-      if (ctx.blob) {
-        const ext = ctx.mimeType?.includes("mp4") ? "m4a" : ctx.mimeType?.includes("ogg") ? "ogg" : "webm";
-        filename = `${ctx.caseRow?.suit_number ?? "session"}_${ctx.sessionId}.${ext}`;
-        setAndRender({ status: "running", kind: state.kind, stage: "downloading", percent: base + span * 0.7 }, retry, cancel);
-        downloadBlob(ctx.blob, filename);
-      } else {
-        filename = `${ctx.caseRow?.suit_number ?? "session"}.audio`;
-        setAndRender({ status: "running", kind: state.kind, stage: "downloading", percent: base + span * 0.7 }, retry, cancel);
-        const a = document.createElement("a");
-        if (!ctx.audioUrl) throw new Error("No audio available");
-        a.href = ctx.audioUrl;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }
+      const ext = ctx.mimeType?.includes("mp4") ? "m4a" : ctx.mimeType?.includes("ogg") ? "ogg" : "webm";
+      filename = `${ctx.caseRow?.suit_number ?? "session"}_${ctx.sessionId}.${ext}`;
+      setAndRender({ status: "running", kind: state.kind, stage: "downloading", percent: base + span * 0.7 }, retry, cancel);
+      downloadBlob(ctx.blob, filename);
       setAndRender({ status: "running", kind: state.kind, stage: "logging_audit", percent: base + span * 0.9 }, retry, cancel);
       try {
         await ctx.logExport({ data: { sessionId: ctx.sessionId, caseId: ctx.caseId, kind: "audio", filename } });
