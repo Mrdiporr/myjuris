@@ -35,6 +35,26 @@ async function aaFetch(path: string, init: RequestInit, key: string) {
   return r.json();
 }
 
+async function aaUpload(audio: Blob, key: string): Promise<{ upload_url: string }> {
+  const response = await fetch(`${AA}/upload`, {
+    method: "POST",
+    headers: {
+      authorization: key,
+      "content-type": "application/octet-stream",
+    },
+    body: audio,
+  });
+  if (!response.ok) {
+    console.error("[diarize] AssemblyAI audio upload failed", response.status);
+    throw new Error("Could not prepare audio for transcription.");
+  }
+  const result = (await response.json()) as { upload_url?: unknown };
+  if (typeof result.upload_url !== "string" || !result.upload_url.startsWith("https://")) {
+    throw new Error("Transcription service returned an invalid audio reference.");
+  }
+  return { upload_url: result.upload_url };
+}
+
 export const diarizeSession = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input) =>
@@ -92,22 +112,24 @@ export const diarizeSession = createServerFn({ method: "POST" })
       return { ok: false as const, error: "Forbidden" };
     }
 
-    // Signed URL for AssemblyAI to fetch the audio directly.
-    const { data: signed, error: signErr } = await supabase.storage
+    // Read the private object through the authenticated session, then upload
+    // its bytes to AssemblyAI instead of issuing a reusable storage bearer URL.
+    const { data: audio, error: audioErr } = await supabase.storage
       .from("session-audio")
-      .createSignedUrl(session.audio_path, 60 * 60);
-    if (signErr || !signed?.signedUrl) {
-      return { ok: false as const, error: signErr?.message ?? "Could not sign audio URL" };
+      .download(session.audio_path);
+    if (audioErr || !audio) {
+      return { ok: false as const, error: "Could not access saved audio for transcription." };
     }
 
     try {
+      const uploaded = await aaUpload(audio, apiKey);
       // Submit transcription job with diarization.
       const submitted = (await aaFetch(
         "/transcript",
         {
           method: "POST",
           body: JSON.stringify({
-            audio_url: signed.signedUrl,
+            audio_url: uploaded.upload_url,
             speaker_labels: true,
             punctuate: true,
             format_text: true,

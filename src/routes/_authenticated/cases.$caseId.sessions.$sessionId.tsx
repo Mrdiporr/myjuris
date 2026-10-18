@@ -76,7 +76,7 @@ function SessionPage() {
   const [bookmarkLabel, setBookmarkLabel] = useState("");
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [persisting, setPersisting] = useState(false);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [cloudAudioBlob, setCloudAudioBlob] = useState<Blob | null>(null);
   const [diarizing, setDiarizing] = useState(false);
   const [permissionDialog, setPermissionDialog] = useState(false);
   const [consentDialog, setConsentDialog] = useState(false);
@@ -93,7 +93,7 @@ function SessionPage() {
   const localBlob = recorder.blob ?? recovered?.blob ?? null;
   const localMime = recorder.mimeType ?? recovered?.mime ?? null;
 
-  const playbackUrl = usePlaybackUrl(audioUrl, localBlob);
+  const playbackUrl = usePlaybackUrl(null, localBlob ?? cloudAudioBlob);
   const uploadingRef = useRef(false);
   const segmentRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
@@ -151,9 +151,7 @@ function SessionPage() {
           },
         },
       });
-      const { data: signed } = await supabase.storage.from("session-audio").createSignedUrl(path, 3600);
-      const signedUrl = signed?.signedUrl ?? null;
-      if (signedUrl) setAudioUrl(signedUrl);
+      setCloudAudioBlob(blob);
       // Only drop the durable cache after a confirmed successful upload.
       await clearCache(sessionId);
       setRecovered(null);
@@ -223,8 +221,14 @@ function SessionPage() {
         setTranscript((row.transcript as TranscriptSegment[]) ?? []);
         setBookmarks((row.bookmarks as Bookmark[]) ?? []);
         if (row.audio_path) {
-          const { data: signed } = await supabase.storage.from("session-audio").createSignedUrl(row.audio_path, 3600);
-          if (signed?.signedUrl) setAudioUrl(signed.signedUrl);
+          const { data: audio, error: audioError } = await supabase.storage
+            .from("session-audio")
+            .download(row.audio_path);
+          if (audioError || !audio) {
+            toast.error("Could not load saved audio. Refresh to retry.");
+          } else {
+            setCloudAudioBlob(audio);
+          }
         }
       }
       setCaseRow((c as CaseRow) ?? null);
@@ -440,9 +444,8 @@ function SessionPage() {
     durationSeconds: durationRef.current,
     sessionId,
     caseId,
-    blob: localBlob,
-    mimeType: localMime,
-    audioUrl,
+    blob: localBlob ?? cloudAudioBlob,
+    mimeType: localMime ?? session?.audio_mime ?? null,
     logExport: logExportFn,
   }));
   const runExport = (kind: ExportKind) => {
@@ -450,7 +453,7 @@ function SessionPage() {
       toast.error("Session not ready to export");
       return;
     }
-    if ((kind === "audio" || kind === "both") && !localBlob && !audioUrl) {
+    if ((kind === "audio" || kind === "both") && !localBlob && !cloudAudioBlob) {
       toast.error("No audio available", { description: "Record or upload audio first." });
       return;
     }
