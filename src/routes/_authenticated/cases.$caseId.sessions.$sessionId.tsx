@@ -27,6 +27,8 @@ import type { Bookmark, TranscriptSegment } from "@/lib/types";
 import { ConsentDialog, consent } from "@/components/ConsentDialog";
 import { usePlaybackUrl } from "@/hooks/usePlaybackUrl";
 import { useExportJob, type ExportKind } from "@/hooks/useExportJob";
+import { Checkbox } from "@/components/ui/checkbox";
+import { redactTranscriptSnapshot } from "@/lib/transcript-redaction";
 
 export const Route = createFileRoute("/_authenticated/cases/$caseId/sessions/$sessionId")({
   component: SessionPage,
@@ -80,6 +82,10 @@ function SessionPage() {
   const [diarizing, setDiarizing] = useState(false);
   const [permissionDialog, setPermissionDialog] = useState(false);
   const [consentDialog, setConsentDialog] = useState(false);
+  const [pdfReviewOpen, setPdfReviewOpen] = useState(false);
+  const [pdfReviewTranscript, setPdfReviewTranscript] = useState<TranscriptSegment[] | null>(null);
+  const [redactedSegmentIds, setRedactedSegmentIds] = useState<Set<string>>(new Set());
+  const [redactedSpeakerLabels, setRedactedSpeakerLabels] = useState<Set<string>>(new Set());
   const [recovered, setRecovered] = useState<{ blob: Blob; mime: string } | null>(null);
   const [editingSpeaker, setEditingSpeaker] = useState<{ id: string; original: string; value: string } | null>(null);
   const [auditRows, setAuditRows] = useState<Array<{ id: string; action: "insert" | "update"; actor_user_id: string | null; changed_fields: string[]; occurred_at: string }>>([]);
@@ -453,6 +459,13 @@ function SessionPage() {
       toast.error("Session not ready to export");
       return;
     }
+    if (kind === "pdf") {
+      setPdfReviewTranscript(transcript.map((segment) => ({ ...segment })));
+      setRedactedSegmentIds(new Set());
+      setRedactedSpeakerLabels(new Set());
+      setPdfReviewOpen(true);
+      return;
+    }
     if ((kind === "audio" || kind === "both") && !localBlob && !cloudAudioBlob) {
       toast.error("No audio available", { description: "Record or upload audio first." });
       return;
@@ -468,6 +481,16 @@ function SessionPage() {
   const interimDisplay = sr.interim;
 
   const sortedBookmarks = useMemo(() => [...bookmarks].sort((a, b) => a.timeMs - b.timeMs), [bookmarks]);
+  const reviewSpeakers = useMemo(
+    () => [...new Set((pdfReviewTranscript ?? []).map((segment) => segment.speaker))],
+    [pdfReviewTranscript],
+  );
+  const generateReviewedPdf = () => {
+    if (!pdfReviewTranscript) return;
+    const reviewedTranscript = redactTranscriptSnapshot(pdfReviewTranscript, redactedSegmentIds, redactedSpeakerLabels);
+    setPdfReviewOpen(false);
+    exportJob.run("pdf", reviewedTranscript);
+  };
 
   // Transcript + flags merged into one chronological stream.
   type TimelineItem =
@@ -828,6 +851,73 @@ function SessionPage() {
         onConfirm={() => { consent.grant(); setConsentDialog(false); void beginRecording(); }}
         onCancel={() => setConsentDialog(false)}
       />
+      <Dialog open={pdfReviewOpen} onOpenChange={setPdfReviewOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Review PDF redactions</DialogTitle>
+            <DialogDescription>
+              Select transcript lines or speaker labels to replace with [REDACTED] in this PDF only. Your saved transcript is unchanged; bookmarks and case details are not redacted here.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-5 max-h-[65vh] overflow-y-auto pr-1">
+            {reviewSpeakers.length > 0 && (
+              <section className="space-y-2">
+                <h3 className="text-sm font-medium">Speaker labels</h3>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {reviewSpeakers.map((speaker, index) => (
+                    <label key={speaker} htmlFor={`redact-speaker-${index}`} className="flex items-center gap-2 rounded-md border border-border p-2 text-sm">
+                      <Checkbox
+                        id={`redact-speaker-${index}`}
+                        checked={redactedSpeakerLabels.has(speaker)}
+                        onCheckedChange={(checked) => setRedactedSpeakerLabels((current) => {
+                          const next = new Set(current);
+                          if (checked === true) next.add(speaker); else next.delete(speaker);
+                          return next;
+                        })}
+                      />
+                      <span className="break-words">{speaker}</span>
+                    </label>
+                  ))}
+                </div>
+              </section>
+            )}
+            <section className="space-y-2">
+              <h3 className="text-sm font-medium">Transcript lines</h3>
+              {pdfReviewTranscript && pdfReviewTranscript.length > 0 ? (
+                <div className="space-y-1">
+                  {pdfReviewTranscript.map((segment, index) => (
+                    <label key={segment.id} htmlFor={`redact-segment-${index}`} className="flex items-start gap-3 rounded-md border border-border p-2.5">
+                      <Checkbox
+                        id={`redact-segment-${index}`}
+                        className="mt-0.5"
+                        checked={redactedSegmentIds.has(segment.id)}
+                        onCheckedChange={(checked) => setRedactedSegmentIds((current) => {
+                          const next = new Set(current);
+                          if (checked === true) next.add(segment.id); else next.delete(segment.id);
+                          return next;
+                        })}
+                      />
+                      <span className="min-w-0 space-y-1">
+                        <span className="flex flex-wrap items-center gap-x-2 text-xs">
+                          <span className="font-mono tabular-nums text-primary">{formatTime(segment.startMs / 1000)}</span>
+                          <span className="font-medium text-foreground">{segment.speaker}</span>
+                        </span>
+                        <span className="block break-words text-sm text-muted-foreground">{segment.text}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No transcript lines are available to review.</p>
+              )}
+            </section>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPdfReviewOpen(false)}>Cancel</Button>
+            <Button onClick={generateReviewedPdf}><FileText className="size-4" /> Generate PDF</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

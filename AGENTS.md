@@ -4,3 +4,4 @@
 - Route every document export through the shared export job and authenticated export audit so progress, cancellation, retries, and ownership checks remain consistent across formats.
 - Case routes render an Outlet for nested session matches and case details only at the case URL; otherwise session controls are hidden behind the parent page.
 - Session audio is read through authenticated storage access and sent to transcription providers as uploaded bytes; never issue reusable signed audio URLs, which remain usable after session deletion.
+- PDF-only transcript redactions are applied to a copied snapshot before generation and retained for retries, so saved transcripts and other export formats remain unchanged.
