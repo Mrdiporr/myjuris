@@ -76,6 +76,7 @@ export function useExportJob(getContext: () => ExportContext) {
   const runningRef = useRef(false);
   const cancelRef = useRef<AbortController | null>(null);
   const toastIdRef = useRef<string | number | null>(null);
+  const pdfTranscriptRef = useRef<TranscriptSegment[] | undefined>(undefined);
   const preparedRef = useRef<{ blob: Blob; filename: string; ctx: ExportContext } | null>(null);
 
   const downloadPdf = useCallback(() => {
@@ -222,14 +223,20 @@ export function useExportJob(getContext: () => ExportContext) {
   );
 
   const runInternal = useCallback(
-    async (kind: ExportKind) => {
+    async (kind: ExportKind, pdfTranscript?: TranscriptSegment[]) => {
       if (runningRef.current) return;
       runningRef.current = true;
+      if (kind === "pdf") {
+        if (pdfTranscript) pdfTranscriptRef.current = pdfTranscript;
+      } else {
+        pdfTranscriptRef.current = undefined;
+      }
+      const stablePdfTranscript = kind === "pdf" ? (pdfTranscript ?? pdfTranscriptRef.current) : undefined;
       preparedRef.current = null;
       const controller = new AbortController();
       cancelRef.current = controller;
       const retry = () => {
-        void runInternal(kind);
+        void runInternal(kind, stablePdfTranscript);
       };
       const cancel = () => {
         controller.abort();
@@ -249,7 +256,7 @@ export function useExportJob(getContext: () => ExportContext) {
             sessionTitle: ctx.session.title, sessionId: ctx.sessionId,
             startedAt: ctx.session.started_at,
             durationSeconds: Math.round(ctx.durationSeconds || ctx.session.duration_seconds),
-            transcript: ctx.transcript, bookmarks: ctx.bookmarks,
+            transcript: stablePdfTranscript ?? ctx.transcript, bookmarks: ctx.bookmarks,
           }, {
             signal: controller.signal,
             onProgress: percent => setAndRender({ status: "running", kind, stage: "building_document", percent }, retry, cancel),
@@ -288,9 +295,9 @@ export function useExportJob(getContext: () => ExportContext) {
     [doDocx, doAudio, renderToast, getContext, setAndRender],
   );
 
-  const run = useCallback((kind: ExportKind) => void runInternal(kind), [runInternal]);
+  const run = useCallback((kind: ExportKind, pdfTranscript?: TranscriptSegment[]) => void runInternal(kind, pdfTranscript), [runInternal]);
   const retry = useCallback(() => {
-    if (state.kind) void runInternal(state.kind);
+    if (state.kind) void runInternal(state.kind, pdfTranscriptRef.current);
   }, [runInternal, state.kind]);
   const cancel = useCallback(() => {
     cancelRef.current?.abort();
