@@ -23,11 +23,15 @@ describe("PDF transcript redaction snapshots", () => {
   });
 
   it("keeps the reviewed copy stable if the original transcript later changes", () => {
-    const reviewed = redactTranscriptSnapshot(transcript, new Set(["one"]), new Set(["Witness"]));
+    const editableSource = transcript.map((segment) => ({ ...segment }));
+    const reviewed = redactTranscriptSnapshot(editableSource, new Set(["one"]), new Set(["Witness"]));
+    editableSource[1].text = "Changed after review";
+    editableSource[2].speaker = "Renamed after review";
     const retrySnapshot = reviewed.map((segment) => ({ ...segment }));
 
     expect(retrySnapshot).toEqual(reviewed);
     expect(retrySnapshot[0]).toMatchObject({ id: "one", text: "[REDACTED]", startMs: 1200, endMs: 2400 });
+    expect(retrySnapshot[1].text).toBe("Public passage");
     expect(retrySnapshot[2]).toMatchObject({ speaker: "[REDACTED]", text: "Another statement" });
   });
 });
