@@ -1,13 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { PDFDocument } from "pdf-lib";
 import { exportSessionPdf } from "../export-pdf";
+import { redactTranscriptSnapshot } from "../transcript-redaction";
 import type { ExportArgs } from "../export";
 
 const fontBytes = {
   regular: new Uint8Array(readFileSync("public/fonts/NotoSans-Regular.ttf")),
   bold: new Uint8Array(readFileSync("public/fonts/NotoSans-Bold.ttf")),
 };
+mkdirSync("/tmp/pdf-qa", { recursive: true });
 const fixture: ExportArgs = {
   caseName: "Adéyẹmí v. Northbridge Holdings", suitNumber: "HC/2026/0142",
   parties: "Dr. Adéyẹmí vs. Northbridge Holdings Ltd.", sessionTitle: "Evidence hearing — Day 2",
@@ -56,5 +58,23 @@ describe("court-ready PDF export", () => {
     await expect(exportSessionPdf(fixture, {
       fontBytes, signal: controller.signal, onProgress: () => controller.abort(),
     })).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("generates a PDF from a redacted snapshot without including selected transcript content", async () => {
+    const source = [
+      { id: "private", speaker: "Confidential Witness", text: "SECRET TESTIMONY 74291", startMs: 12500, endMs: 18000 },
+      { id: "public", speaker: "Judge", text: "The hearing is adjourned.", startMs: 20000, endMs: 24000 },
+    ];
+    const reviewedTranscript = redactTranscriptSnapshot(source, new Set(["private"]), new Set(["Confidential Witness"]));
+    const blob = await exportSessionPdf({ ...fixture, transcript: reviewedTranscript }, { fontBytes });
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+
+    expect(reviewedTranscript).toEqual([
+      { id: "private", speaker: "[REDACTED]", text: "[REDACTED]", startMs: 12500, endMs: 18000 },
+      { id: "public", speaker: "Judge", text: "The hearing is adjourned.", startMs: 20000, endMs: 24000 },
+    ]);
+    expect(source[0]).toMatchObject({ speaker: "Confidential Witness", text: "SECRET TESTIMONY 74291" });
+    expect((await PDFDocument.load(bytes)).getPageCount()).toBeGreaterThan(1);
+    writeFileSync("/tmp/pdf-qa/redacted-bundle.pdf", bytes);
   });
 });
