@@ -1,8 +1,8 @@
-# Court-ready PDF exports
+# myJuris roadmap
 
-- [x] Generate a paginated PDF bundle with case/session details, speakers, timestamped transcript, and bookmark index.
-- [x] Add PDF generation, cancellation, retry, and download to the session export menu.
-- [x] Verify PDF layout, real signed-in download, and app health.
-- [x] Add PDF-only transcript and speaker-label redaction review using `[REDACTED]`.
-- [x] Verify redaction isolation in export output, retry snapshot stability, focused tests, and preview health.
-- [ ] Complete a live recording, playback, and timestamped transcript check — blocked: the signed-in preview browser exposes no microphone input device; recording and playback cannot be exercised here.
+- [x] Court-ready PDF bundle + export menu + verification
+- [x] PDF-only `[REDACTED]` review (transcript lines + speaker labels), snapshot stable for retries
+- [ ] Re-run recorder test after microphone grant — verify record → stop → save → playback + transcript
+- [ ] Transcript-and-bookmark search on the session page; results jump to the matching moment in the recording
+- [ ] Editable session titles + hearing type (short list incl. "Other") + optional notes, shown in the case's recording list
+- [ ] Transcript correction: quick edits on the session page + pre-export review flow; keep original + edit history (archive); exports use corrected text only

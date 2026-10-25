@@ -47,6 +47,8 @@ const SessionUpdateSchema = z.object({
   patch: z
     .object({
       title: z.string().trim().min(1).max(200).optional(),
+      hearing_type: z.string().trim().max(80).nullable().optional(),
+      notes: z.string().max(8000).nullable().optional(),
       audio_path: z.string().nullable().optional(),
       audio_mime: z.string().nullable().optional(),
       duration_seconds: z.number().int().nonnegative().optional(),
