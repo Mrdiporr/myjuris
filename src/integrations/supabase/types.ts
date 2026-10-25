@@ -170,7 +170,9 @@ export type Database = {
           created_at: string
           duration_seconds: number
           ended_at: string | null
+          hearing_type: string | null
           id: string
+          notes: string | null
           started_at: string
           title: string
           transcript: Json
@@ -185,7 +187,9 @@ export type Database = {
           created_at?: string
           duration_seconds?: number
           ended_at?: string | null
+          hearing_type?: string | null
           id?: string
+          notes?: string | null
           started_at?: string
           title?: string
           transcript?: Json
@@ -200,7 +204,9 @@ export type Database = {
           created_at?: string
           duration_seconds?: number
           ended_at?: string | null
+          hearing_type?: string | null
           id?: string
+          notes?: string | null
           started_at?: string
           title?: string
           transcript?: Json
