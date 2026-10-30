@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft, Mic, MicOff, Pause, Play, Square, Flag, Loader2,
   Download, FileText, AlertCircle, CheckCircle2, Save, UserCircle, Sparkles, ShieldAlert, Activity,
+  Search, Pencil, StickyNote,
 } from "lucide-react";
 import { diarizeSession } from "@/lib/diarize.functions";
 import { updateSession, listSessionAudit, logExport } from "@/lib/sessions.functions";
@@ -16,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
@@ -29,6 +31,8 @@ import { usePlaybackUrl } from "@/hooks/usePlaybackUrl";
 import { useExportJob, type ExportKind } from "@/hooks/useExportJob";
 import { Checkbox } from "@/components/ui/checkbox";
 import { redactTranscriptSnapshot } from "@/lib/transcript-redaction";
+import { applyTextCorrection, reviewEditDiffers } from "@/lib/transcript-corrections";
+import type { ReactNode } from "react";
 
 export const Route = createFileRoute("/_authenticated/cases/$caseId/sessions/$sessionId")({
   component: SessionPage,
@@ -50,12 +54,15 @@ interface SessionRow {
   duration_seconds: number;
   transcript: TranscriptSegment[];
   bookmarks: Bookmark[];
+  hearing_type: string | null;
+  notes: string | null;
   started_at: string;
   ended_at: string | null;
 }
 interface CaseRow { id: string; case_name: string; suit_number: string; plaintiff: string; defendant: string }
 
 const SPEAKERS = ["Speaker 1 (Judge)", "Speaker 2 (Counsel)", "Speaker 3 (Witness)", "Speaker 4 (Clerk)"];
+const HEARING_TYPES = ["Arraignment", "Hearing", "Trial", "Ruling / Judgment", "Directions", "Other"];
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
 
@@ -89,6 +96,16 @@ function SessionPage() {
   const [recovered, setRecovered] = useState<{ blob: Blob; mime: string } | null>(null);
   const [editingSpeaker, setEditingSpeaker] = useState<{ id: string; original: string; value: string } | null>(null);
   const [auditRows, setAuditRows] = useState<Array<{ id: string; action: "insert" | "update"; actor_user_id: string | null; changed_fields: string[]; occurred_at: string }>>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchHitId, setSearchHitId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState<{ id: string; value: string } | null>(null);
+  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  const [hearingTypeChoice, setHearingTypeChoice] = useState("");
+  const [customHearing, setCustomHearing] = useState("");
+  const [notesDraft, setNotesDraft] = useState("");
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [reviewKind, setReviewKind] = useState<"pdf" | "docx" | "both">("pdf");
+  const [reviewEdits, setReviewEdits] = useState<Record<string, string>>({});
   const diarize = useServerFn(diarizeSession);
   const updateSessionFn = useServerFn(updateSession);
   const fetchAudit = useServerFn(listSessionAudit);
@@ -102,6 +119,7 @@ function SessionPage() {
   const playbackUrl = usePlaybackUrl(null, localBlob ?? cloudAudioBlob);
   const uploadingRef = useRef(false);
   const segmentRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const isSecure = typeof window !== "undefined" ? window.isSecureContext : true;
   const browserHint = (() => {
@@ -226,6 +244,9 @@ function SessionPage() {
         setSession(row);
         setTranscript((row.transcript as TranscriptSegment[]) ?? []);
         setBookmarks((row.bookmarks as Bookmark[]) ?? []);
+        setHearingTypeChoice(row.hearing_type && HEARING_TYPES.includes(row.hearing_type) ? row.hearing_type : row.hearing_type ? "Other" : "");
+        setCustomHearing(row.hearing_type && !HEARING_TYPES.includes(row.hearing_type) ? row.hearing_type : "");
+        setNotesDraft(row.notes ?? "");
         if (row.audio_path) {
           const { data: audio, error: audioError } = await supabase.storage
             .from("session-audio")
@@ -409,6 +430,55 @@ function SessionPage() {
     if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
+  /** Jump to a moment: seek the recording to that time and bring the matching point into view. */
+  const jumpToMoment = (timeMs: number, exactId?: string) => {
+    const audio = audioRef.current;
+    if (audio && Number.isFinite(timeMs)) {
+      try {
+        audio.currentTime = Math.max(0, timeMs / 1000);
+        void audio.play().catch(() => {});
+      } catch { /* playback not available */ }
+    }
+    if (exactId) {
+      segmentRefs.current[exactId]?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setSearchHitId(exactId);
+      window.setTimeout(() => setSearchHitId(null), 2500);
+    } else {
+      scrollToTime(timeMs);
+    }
+  };
+
+  /** Persist editable session details (title, hearing type, notes). */
+  const saveSessionMeta = async () => {
+    if (!session) return;
+    const title = (titleDraft ?? session.title).trim() || session.title;
+    const hearingType = (hearingTypeChoice === "Other" ? customHearing : hearingTypeChoice).trim() || null;
+    const notes = notesDraft.trim() || null;
+    setSavingMeta(true);
+    try {
+      await updateSessionFn({ data: { sessionId, caseId, patch: { title, hearing_type: hearingType, notes } } });
+      setSession((prev) => (prev ? { ...prev, title, hearing_type: hearingType, notes } : prev));
+      setTitleDraft(null);
+      toast.success("Session details saved");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save session details");
+    } finally {
+      setSavingMeta(false);
+    }
+  };
+
+  /** Quick-correct one segment's text on the session page; original wording + history stay in the archive. */
+  const commitTextCorrection = (segmentId: string) => {
+    const seg = transcript.find((s) => s.id === segmentId);
+    const value = editingText?.id === segmentId ? editingText.value : undefined;
+    setEditingText(null);
+    if (!seg || value == null) return;
+    const next = applyTextCorrection(seg, value);
+    if (!next) return;
+    setTranscript((prev) => prev.map((s) => (s.id === segmentId ? next : s)));
+    toast.success("Correction applied", { description: "Exports use the corrected text; the original wording stays in the archive." });
+  };
+
   const loadAudit = async () => {
     try {
       const { rows } = await fetchAudit({ data: { sessionId } });
@@ -459,10 +529,12 @@ function SessionPage() {
       toast.error("Session not ready to export");
       return;
     }
-    if (kind === "pdf") {
+    if (kind === "pdf" || kind === "docx" || kind === "both") {
+      setReviewKind(kind);
       setPdfReviewTranscript(transcript.map((segment) => ({ ...segment })));
       setRedactedSegmentIds(new Set());
       setRedactedSpeakerLabels(new Set());
+      setReviewEdits({});
       setPdfReviewOpen(true);
       return;
     }
@@ -485,11 +557,28 @@ function SessionPage() {
     () => [...new Set((pdfReviewTranscript ?? []).map((segment) => segment.speaker))],
     [pdfReviewTranscript],
   );
-  const generateReviewedPdf = () => {
+  /** Commits reviewed text edits into the archive (original + history kept),
+   * then runs the export with the corrected copy. */
+  const generateReviewedExport = () => {
     if (!pdfReviewTranscript) return;
-    const reviewedTranscript = redactTranscriptSnapshot(pdfReviewTranscript, redactedSegmentIds, redactedSpeakerLabels);
+    let corrected = 0;
+    const archived: TranscriptSegment[] = transcript.map((s) => {
+      const reviewedText = reviewEdits[s.id];
+      if (!reviewEditDiffers(s, reviewedText)) return s;
+      const next = applyTextCorrection(s, reviewedText);
+      if (!next) return s;
+      corrected += 1;
+      return next;
+    });
+    if (corrected > 0) setTranscript(archived);
+    const showRedactions = reviewKind === "pdf";
+    const exportCopy = redactTranscriptSnapshot(
+      archived,
+      showRedactions ? redactedSegmentIds : new Set<string>(),
+      showRedactions ? redactedSpeakerLabels : new Set<string>(),
+    );
     setPdfReviewOpen(false);
-    exportJob.run("pdf", reviewedTranscript);
+    exportJob.run(reviewKind, exportCopy);
   };
 
   // Transcript + flags merged into one chronological stream.
@@ -504,6 +593,18 @@ function SessionPage() {
     return items.sort((a, b) => a.time - b.time);
   }, [transcript, bookmarks]);
 
+  // Search across transcript text, speaker labels, and bookmark labels.
+  const searchQueryTrimmed = searchQuery.trim();
+  const searching = searchQueryTrimmed.length > 0;
+  const matchesQuery = (text: string) => text.toLowerCase().includes(searchQueryTrimmed.toLowerCase());
+  const visibleTimeline = useMemo<TimelineItem[]>(() => {
+    if (!searching) return timeline;
+    return timeline.filter((item) =>
+      item.kind === "flag" ? matchesQuery(item.flag.label) : matchesQuery(item.seg.text) || matchesQuery(item.seg.speaker),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeline, searching, searchQueryTrimmed]);
+
   if (loading) return <div className="grid place-items-center py-20"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>;
 
   return (
@@ -513,10 +614,62 @@ function SessionPage() {
       </Button>
 
       {caseRow && (
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-5">
-          <h1 className="text-xl font-semibold tracking-tight">{caseRow.case_name}</h1>
-          <span className="text-xs font-mono text-muted-foreground">{caseRow.suit_number}</span>
-          {session && <span className="text-xs text-muted-foreground">· {formatDate(session.started_at)}</span>}
+        <div className="mb-5 space-y-3">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h1 className="text-xl font-semibold tracking-tight">{caseRow.case_name}</h1>
+            <span className="text-xs font-mono text-muted-foreground">{caseRow.suit_number}</span>
+            {session && <span className="text-xs text-muted-foreground">· {formatDate(session.started_at)}</span>}
+          </div>
+          {session && (
+            <Card className="p-4">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_auto_auto] items-end">
+                <div className="space-y-1.5 min-w-0">
+                  <label className="text-xs uppercase tracking-widest text-muted-foreground">Session title</label>
+                  {titleDraft === null ? (
+                    <button
+                      type="button"
+                      onClick={() => setTitleDraft(session.title)}
+                      className="w-full flex items-center gap-2 rounded-md border border-border bg-transparent px-3 py-2 text-left text-sm hover:bg-muted/60 transition-colors"
+                      title="Click to rename this session"
+                    >
+                      <span className="truncate flex-1">{session.title}</span>
+                      <Pencil className="size-3.5 text-muted-foreground shrink-0" />
+                    </button>
+                  ) : (
+                    <Input
+                      autoFocus
+                      value={titleDraft}
+                      onChange={(e) => setTitleDraft(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Escape") setTitleDraft(null); }}
+                      placeholder="Session title"
+                    />
+                  )}
+                </div>
+                <div className="space-y-1.5 min-w-0">
+                  <label className="text-xs uppercase tracking-widest text-muted-foreground">Hearing type</label>
+                  <Select value={hearingTypeChoice || "none"} onValueChange={(v) => setHearingTypeChoice(v === "none" ? "" : v)}>
+                    <SelectTrigger className="w-full lg:w-[190px]"><SelectValue placeholder="Not set" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not set</SelectItem>
+                      {HEARING_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button onClick={saveSessionMeta} disabled={savingMeta} className="sm:justify-self-end">
+                  {savingMeta ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />} Save details
+                </Button>
+              </div>
+              {hearingTypeChoice === "Other" && (
+                <div className="mt-3">
+                  <Input value={customHearing} onChange={(e) => setCustomHearing(e.target.value)} placeholder="Custom hearing type (e.g. Case management conference)" />
+                </div>
+              )}
+              <div className="mt-3 space-y-1.5">
+                <label className="text-xs uppercase tracking-widest text-muted-foreground flex items-center gap-1.5"><StickyNote className="size-3.5" /> Notes</label>
+                <Textarea value={notesDraft} onChange={(e) => setNotesDraft(e.target.value)} rows={2} placeholder="Optional notes for this session — context, attendance, next steps…" />
+              </div>
+            </Card>
+          )}
         </div>
       )}
 
@@ -587,7 +740,7 @@ function SessionPage() {
               </div>
             )}
             {playbackUrl && recordingState !== "recording" && (
-              <audio controls src={playbackUrl} className="w-full mt-4" />
+              <audio controls src={playbackUrl} ref={audioRef} className="w-full mt-4" />
             )}
           </Card>
 
@@ -706,31 +859,56 @@ function SessionPage() {
                 </DropdownMenu>
               </div>
             </div>
+            <div className="px-4 pb-3 border-b border-border">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+                <Input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search transcript and bookmarks…"
+                  className="pl-8 h-8 text-sm"
+                />
+              </div>
+              {searching && (
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  {visibleTimeline.length === 0
+                    ? "No transcript lines or bookmarks match."
+                    : `${visibleTimeline.length} match${visibleTimeline.length === 1 ? "" : "es"} — click one to jump to that moment in the recording.`}
+                </p>
+              )}
+            </div>
             <ScrollArea className="h-[460px]">
               <div className="p-4 space-y-3">
-                {transcript.length === 0 && !interimDisplay && (
+                {visibleTimeline.length === 0 && !interimDisplay && (
                   <div className="text-sm text-muted-foreground text-center py-12">
-                    {isRecording ? "Listening… speak to populate the transcript." : "Press Record to begin capturing audio and live transcription."}
+                    {searching
+                      ? "No matches — try another word."
+                      : isRecording
+                        ? "Listening… speak to populate the transcript."
+                        : "Press Record to begin capturing audio and live transcription."}
                   </div>
                 )}
-                {timeline.map((item) =>
+                {visibleTimeline.map((item) =>
                   item.kind === "flag" ? (
-                    <div
+                    <button
+                      type="button"
                       key={`flag-${item.flag.id}`}
                       id={`flag-${item.flag.id}`}
-                      className="flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-1.5"
+                      onClick={() => jumpToMoment(item.time)}
+                      className={`w-full text-left flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-1.5 transition-shadow cursor-pointer ${searchHitId === item.flag.id ? "ring-2 ring-warning" : "hover:shadow-elevated"}`}
+                      title="Jump to this moment in the recording"
                     >
                       <Flag className="size-3.5 text-warning shrink-0" />
                       <span className="text-[11px] font-mono tabular-nums text-warning shrink-0">{formatTime(item.time / 1000)}</span>
-                      <span className="text-xs break-words">{item.flag.label}</span>
-                    </div>
+                      <span className="text-xs break-words"><Highlight text={item.flag.label} query={searchQueryTrimmed} /></span>
+                    </button>
                   ) : (
                     <div
                       key={item.seg.id}
                       ref={(el) => { segmentRefs.current[item.seg.id] = el; }}
-                      className="group"
+                      className={`group rounded-md px-1.5 py-0.5 -mx-1.5 transition-shadow ${searchHitId === item.seg.id ? "ring-2 ring-primary bg-primary/5" : ""}`}
                     >
-                      <div className="flex items-baseline gap-2 mb-0.5">
+                      <div className="flex items-baseline gap-2 mb-0.5 flex-wrap">
                         <span className="text-[11px] font-mono text-primary tabular-nums">{formatTime(item.seg.startMs / 1000)}</span>
                         {editingSpeaker?.id === item.seg.id ? (
                           <SpeakerEditor
@@ -739,7 +917,6 @@ function SessionPage() {
                             onCancel={() => setEditingSpeaker(null)}
                             onSave={(all: boolean) => applySpeakerRename(item.seg.id, editingSpeaker!.original, editingSpeaker!.value, all)}
                           />
-
                         ) : (
                           <button
                             type="button"
@@ -750,8 +927,45 @@ function SessionPage() {
                             {item.seg.speaker}
                           </button>
                         )}
+                        {(item.seg.corrections?.length ?? 0) > 0 && (
+                          <Badge variant="outline" className="text-[9px]" title="Edited — the original wording is kept in the archive">
+                            edited
+                          </Badge>
+                        )}
                       </div>
-                      <p className="text-sm leading-relaxed text-foreground/95 pl-1">{item.seg.text}</p>
+                      {editingText?.id === item.seg.id ? (
+                        <div className="space-y-1.5 pl-1">
+                          <Textarea
+                            autoFocus
+                            rows={2}
+                            value={editingText.value}
+                            onChange={(e) => setEditingText((s) => (s ? { ...s, value: e.target.value } : s))}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commitTextCorrection(item.seg.id); }
+                              if (e.key === "Escape") { e.preventDefault(); setEditingText(null); }
+                            }}
+                            className="text-sm"
+                          />
+                          <div className="flex items-center gap-2">
+                            <Button size="sm" className="h-6 px-2 text-[11px]" onClick={() => commitTextCorrection(item.seg.id)}>Save correction</Button>
+                            <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setEditingText(null)}>Cancel</Button>
+                            <span className="text-[10px] text-muted-foreground">Enter/⌘+Enter saves · Esc cancels</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <p
+                          onClick={() => setEditingText({ id: item.seg.id, value: item.seg.text })}
+                          title="Click to correct this text"
+                          className="text-sm leading-relaxed text-foreground/95 pl-1 cursor-text"
+                        >
+                          <Highlight text={item.seg.text} query={searchQueryTrimmed} />
+                        </p>
+                      )}
+                      {item.seg.originalText && editingText?.id !== item.seg.id && (
+                        <p className="mt-0.5 pl-1 text-[11px] text-muted-foreground/80 italic" title="Original wording (kept in the archive)">
+                          Original: <Highlight text={item.seg.originalText} query={searchQueryTrimmed} />
+                        </p>
+                      )}
                     </div>
                   ),
                 )}
@@ -782,12 +996,12 @@ function SessionPage() {
                   {sortedBookmarks.map((b) => (
                     <li key={b.id} className="flex items-start gap-3 p-2.5 rounded-md bg-muted/40 border border-border">
                       <button
-                        onClick={() => scrollToTime(b.timeMs)}
+                        onClick={() => jumpToMoment(b.timeMs)}
                         className="flex items-start gap-3 flex-1 text-left min-w-0"
-                        title="Jump to this point in the transcript"
+                        title="Jump to this moment in the recording"
                       >
                         <span className="mt-0.5 text-[11px] font-mono tabular-nums text-warning shrink-0">{formatTime(b.timeMs / 1000)}</span>
-                        <span className="text-sm flex-1 break-words">{b.label}</span>
+                        <span className="text-sm flex-1 break-words"><Highlight text={b.label} query={searchQueryTrimmed} /></span>
                       </button>
                       <button onClick={() => setBookmarks((p) => p.filter((x) => x.id !== b.id))} className="text-xs text-muted-foreground hover:text-destructive">×</button>
                     </li>
