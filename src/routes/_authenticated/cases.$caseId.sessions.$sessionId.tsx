@@ -430,6 +430,55 @@ function SessionPage() {
     if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
+  /** Jump to a moment: seek the recording to that time and bring the matching point into view. */
+  const jumpToMoment = (timeMs: number, exactId?: string) => {
+    const audio = audioRef.current;
+    if (audio && Number.isFinite(timeMs)) {
+      try {
+        audio.currentTime = Math.max(0, timeMs / 1000);
+        void audio.play().catch(() => {});
+      } catch { /* playback not available */ }
+    }
+    if (exactId) {
+      segmentRefs.current[exactId]?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setSearchHitId(exactId);
+      window.setTimeout(() => setSearchHitId(null), 2500);
+    } else {
+      scrollToTime(timeMs);
+    }
+  };
+
+  /** Persist editable session details (title, hearing type, notes). */
+  const saveSessionMeta = async () => {
+    if (!session) return;
+    const title = (titleDraft ?? session.title).trim() || session.title;
+    const hearingType = (hearingTypeChoice === "Other" ? customHearing : hearingTypeChoice).trim() || null;
+    const notes = notesDraft.trim() || null;
+    setSavingMeta(true);
+    try {
+      await updateSessionFn({ data: { sessionId, caseId, patch: { title, hearing_type: hearingType, notes } } });
+      setSession((prev) => (prev ? { ...prev, title, hearing_type: hearingType, notes } : prev));
+      setTitleDraft(null);
+      toast.success("Session details saved");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save session details");
+    } finally {
+      setSavingMeta(false);
+    }
+  };
+
+  /** Quick-correct one segment's text on the session page; original wording + history stay in the archive. */
+  const commitTextCorrection = (segmentId: string) => {
+    const seg = transcript.find((s) => s.id === segmentId);
+    const value = editingText?.id === segmentId ? editingText.value : undefined;
+    setEditingText(null);
+    if (!seg || value == null) return;
+    const next = applyTextCorrection(seg, value);
+    if (!next) return;
+    setTranscript((prev) => prev.map((s) => (s.id === segmentId ? next : s)));
+    toast.success("Correction applied", { description: "Exports use the corrected text; the original wording stays in the archive." });
+  };
+
   const loadAudit = async () => {
     try {
       const { rows } = await fetchAudit({ data: { sessionId } });
@@ -480,10 +529,12 @@ function SessionPage() {
       toast.error("Session not ready to export");
       return;
     }
-    if (kind === "pdf") {
+    if (kind === "pdf" || kind === "docx" || kind === "both") {
+      setReviewKind(kind);
       setPdfReviewTranscript(transcript.map((segment) => ({ ...segment })));
       setRedactedSegmentIds(new Set());
       setRedactedSpeakerLabels(new Set());
+      setReviewEdits({});
       setPdfReviewOpen(true);
       return;
     }
@@ -506,11 +557,28 @@ function SessionPage() {
     () => [...new Set((pdfReviewTranscript ?? []).map((segment) => segment.speaker))],
     [pdfReviewTranscript],
   );
-  const generateReviewedPdf = () => {
+  /** Commits reviewed text edits into the archive (original + history kept),
+   * then runs the export with the corrected copy. */
+  const generateReviewedExport = () => {
     if (!pdfReviewTranscript) return;
-    const reviewedTranscript = redactTranscriptSnapshot(pdfReviewTranscript, redactedSegmentIds, redactedSpeakerLabels);
+    let corrected = 0;
+    const archived: TranscriptSegment[] = transcript.map((s) => {
+      const reviewedText = reviewEdits[s.id];
+      if (!reviewEditDiffers(s, reviewedText)) return s;
+      const next = applyTextCorrection(s, reviewedText);
+      if (!next) return s;
+      corrected += 1;
+      return next;
+    });
+    if (corrected > 0) setTranscript(archived);
+    const showRedactions = reviewKind === "pdf";
+    const exportCopy = redactTranscriptSnapshot(
+      archived,
+      showRedactions ? redactedSegmentIds : new Set<string>(),
+      showRedactions ? redactedSpeakerLabels : new Set<string>(),
+    );
     setPdfReviewOpen(false);
-    exportJob.run("pdf", reviewedTranscript);
+    exportJob.run(reviewKind, exportCopy);
   };
 
   // Transcript + flags merged into one chronological stream.
@@ -524,6 +592,18 @@ function SessionPage() {
     ];
     return items.sort((a, b) => a.time - b.time);
   }, [transcript, bookmarks]);
+
+  // Search across transcript text, speaker labels, and bookmark labels.
+  const searchQueryTrimmed = searchQuery.trim();
+  const searching = searchQueryTrimmed.length > 0;
+  const matchesQuery = (text: string) => text.toLowerCase().includes(searchQueryTrimmed.toLowerCase());
+  const visibleTimeline = useMemo<TimelineItem[]>(() => {
+    if (!searching) return timeline;
+    return timeline.filter((item) =>
+      item.kind === "flag" ? matchesQuery(item.flag.label) : matchesQuery(item.seg.text) || matchesQuery(item.seg.speaker),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeline, searching, searchQueryTrimmed]);
 
   if (loading) return <div className="grid place-items-center py-20"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>;
 
