@@ -39,6 +39,8 @@ interface CaseRow {
 interface SessionRow {
   id: string;
   title: string;
+  hearing_type: string | null;
+  notes: string | null;
   duration_seconds: number;
   started_at: string;
   ended_at: string | null;
@@ -60,7 +62,7 @@ function CaseDetail() {
       setLoading(true);
       const [{ data: c, error: ce }, { data: ss, error: se }] = await Promise.all([
         supabase.from("cases").select("*").eq("id", caseId).maybeSingle(),
-        supabase.from("sessions").select("id,title,duration_seconds,started_at,ended_at,transcript,bookmarks").eq("case_id", caseId).order("started_at", { ascending: false }),
+        supabase.from("sessions").select("id,title,hearing_type,notes,duration_seconds,started_at,ended_at,transcript,bookmarks").eq("case_id", caseId).order("started_at", { ascending: false }),
       ]);
       if (ce) toast.error(ce.message);
       if (se) toast.error(se.message);
@@ -126,8 +128,12 @@ function CaseDetail() {
             <Link key={s.id} to="/cases/$caseId/sessions/$sessionId" params={{ caseId, sessionId: s.id }}>
               <Card className="p-4 hover:border-primary/60 hover:shadow-elevated transition-all cursor-pointer flex items-center justify-between gap-4">
                 <div className="min-w-0">
-                  <div className="font-medium truncate">{s.title}</div>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-medium truncate">{s.title}</span>
+                    {s.hearing_type && <Badge variant="outline" className="text-[10px] shrink-0">{s.hearing_type}</Badge>}
+                  </div>
                   <div className="text-xs text-muted-foreground mt-0.5">{formatDate(s.started_at)}</div>
+                  {s.notes && <div className="text-xs text-muted-foreground mt-1 line-clamp-2 max-w-2xl" title={s.notes}>{s.notes}</div>}
                 </div>
                 <div className="flex items-center gap-4 text-xs text-muted-foreground shrink-0">
                   <span className="flex items-center gap-1.5"><Clock className="size-3.5" /> {formatTime(s.duration_seconds)}</span>

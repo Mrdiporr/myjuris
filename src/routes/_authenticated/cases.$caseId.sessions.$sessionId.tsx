@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft, Mic, MicOff, Pause, Play, Square, Flag, Loader2,
   Download, FileText, AlertCircle, CheckCircle2, Save, UserCircle, Sparkles, ShieldAlert, Activity,
+  Search, Pencil, StickyNote,
 } from "lucide-react";
 import { diarizeSession } from "@/lib/diarize.functions";
 import { updateSession, listSessionAudit, logExport } from "@/lib/sessions.functions";
@@ -16,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
@@ -29,6 +31,8 @@ import { usePlaybackUrl } from "@/hooks/usePlaybackUrl";
 import { useExportJob, type ExportKind } from "@/hooks/useExportJob";
 import { Checkbox } from "@/components/ui/checkbox";
 import { redactTranscriptSnapshot } from "@/lib/transcript-redaction";
+import { applyTextCorrection, reviewEditDiffers } from "@/lib/transcript-corrections";
+import type { ReactNode } from "react";
 
 export const Route = createFileRoute("/_authenticated/cases/$caseId/sessions/$sessionId")({
   component: SessionPage,
@@ -50,12 +54,15 @@ interface SessionRow {
   duration_seconds: number;
   transcript: TranscriptSegment[];
   bookmarks: Bookmark[];
+  hearing_type: string | null;
+  notes: string | null;
   started_at: string;
   ended_at: string | null;
 }
 interface CaseRow { id: string; case_name: string; suit_number: string; plaintiff: string; defendant: string }
 
 const SPEAKERS = ["Speaker 1 (Judge)", "Speaker 2 (Counsel)", "Speaker 3 (Witness)", "Speaker 4 (Clerk)"];
+const HEARING_TYPES = ["Arraignment", "Hearing", "Trial", "Ruling / Judgment", "Directions", "Other"];
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
 
@@ -89,6 +96,16 @@ function SessionPage() {
   const [recovered, setRecovered] = useState<{ blob: Blob; mime: string } | null>(null);
   const [editingSpeaker, setEditingSpeaker] = useState<{ id: string; original: string; value: string } | null>(null);
   const [auditRows, setAuditRows] = useState<Array<{ id: string; action: "insert" | "update"; actor_user_id: string | null; changed_fields: string[]; occurred_at: string }>>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchHitId, setSearchHitId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState<{ id: string; value: string } | null>(null);
+  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  const [hearingTypeChoice, setHearingTypeChoice] = useState("");
+  const [customHearing, setCustomHearing] = useState("");
+  const [notesDraft, setNotesDraft] = useState("");
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [reviewKind, setReviewKind] = useState<"pdf" | "docx" | "both">("pdf");
+  const [reviewEdits, setReviewEdits] = useState<Record<string, string>>({});
   const diarize = useServerFn(diarizeSession);
   const updateSessionFn = useServerFn(updateSession);
   const fetchAudit = useServerFn(listSessionAudit);
@@ -102,6 +119,7 @@ function SessionPage() {
   const playbackUrl = usePlaybackUrl(null, localBlob ?? cloudAudioBlob);
   const uploadingRef = useRef(false);
   const segmentRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const isSecure = typeof window !== "undefined" ? window.isSecureContext : true;
   const browserHint = (() => {
@@ -226,6 +244,9 @@ function SessionPage() {
         setSession(row);
         setTranscript((row.transcript as TranscriptSegment[]) ?? []);
         setBookmarks((row.bookmarks as Bookmark[]) ?? []);
+        setHearingTypeChoice(row.hearing_type && HEARING_TYPES.includes(row.hearing_type) ? row.hearing_type : row.hearing_type ? "Other" : "");
+        setCustomHearing(row.hearing_type && !HEARING_TYPES.includes(row.hearing_type) ? row.hearing_type : "");
+        setNotesDraft(row.notes ?? "");
         if (row.audio_path) {
           const { data: audio, error: audioError } = await supabase.storage
             .from("session-audio")
