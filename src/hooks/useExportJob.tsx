@@ -77,6 +77,7 @@ export function useExportJob(getContext: () => ExportContext) {
   const cancelRef = useRef<AbortController | null>(null);
   const toastIdRef = useRef<string | number | null>(null);
   const pdfTranscriptRef = useRef<TranscriptSegment[] | undefined>(undefined);
+  const reviewedRef = useRef<TranscriptSegment[] | undefined>(undefined);
   const preparedRef = useRef<{ blob: Blob; filename: string; ctx: ExportContext } | null>(null);
 
   const downloadPdf = useCallback(() => {
@@ -179,7 +180,7 @@ export function useExportJob(getContext: () => ExportContext) {
         sessionTitle: ctx.session.title,
         startedAt: ctx.session.started_at,
         durationSeconds: Math.round(ctx.durationSeconds || ctx.session.duration_seconds),
-        transcript: ctx.transcript,
+        transcript: reviewedRef.current ?? ctx.transcript,
         bookmarks: ctx.bookmarks,
       });
       checkCancel(signal);
@@ -226,12 +227,10 @@ export function useExportJob(getContext: () => ExportContext) {
     async (kind: ExportKind, pdfTranscript?: TranscriptSegment[]) => {
       if (runningRef.current) return;
       runningRef.current = true;
-      if (kind === "pdf") {
-        if (pdfTranscript) pdfTranscriptRef.current = pdfTranscript;
-      } else {
-        pdfTranscriptRef.current = undefined;
-      }
-      const stablePdfTranscript = kind === "pdf" ? (pdfTranscript ?? pdfTranscriptRef.current) : undefined;
+      if (pdfTranscript) pdfTranscriptRef.current = pdfTranscript;
+      else if (kind === "audio") pdfTranscriptRef.current = undefined;
+      const stablePdfTranscript = kind === "audio" ? undefined : (pdfTranscript ?? pdfTranscriptRef.current);
+      reviewedRef.current = stablePdfTranscript;
       preparedRef.current = null;
       const controller = new AbortController();
       cancelRef.current = controller;

@@ -1068,13 +1068,13 @@ function SessionPage() {
       <Dialog open={pdfReviewOpen} onOpenChange={setPdfReviewOpen}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Review PDF redactions</DialogTitle>
+            <DialogTitle>Review before export</DialogTitle>
             <DialogDescription>
-              Select transcript lines or speaker labels to replace with [REDACTED] in this PDF only. Your saved transcript is unchanged; bookmarks and case details are not redacted here.
+              {reviewKind === "pdf" ? "Correct recognition errors and select lines or speaker labels to replace with [REDACTED] in this PDF only." : "Correct recognition errors before exporting."} Corrections are saved to the transcript; the original wording and edit history stay in the archive.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5 max-h-[65vh] overflow-y-auto pr-1">
-            {reviewSpeakers.length > 0 && (
+            {reviewKind === "pdf" && reviewSpeakers.length > 0 && (
               <section className="space-y-2">
                 <h3 className="text-sm font-medium">Speaker labels</h3>
                 <div className="grid gap-2 sm:grid-cols-2">
@@ -1100,8 +1100,8 @@ function SessionPage() {
               {pdfReviewTranscript && pdfReviewTranscript.length > 0 ? (
                 <div className="space-y-1">
                   {pdfReviewTranscript.map((segment, index) => (
-                    <label key={segment.id} htmlFor={`redact-segment-${index}`} className="flex items-start gap-3 rounded-md border border-border p-2.5">
-                      <Checkbox
+                    <div key={segment.id} className="flex items-start gap-3 rounded-md border border-border p-2.5">
+                      {reviewKind === "pdf" && <Checkbox
                         id={`redact-segment-${index}`}
                         className="mt-0.5"
                         checked={redactedSegmentIds.has(segment.id)}
@@ -1110,15 +1110,15 @@ function SessionPage() {
                           if (checked === true) next.add(segment.id); else next.delete(segment.id);
                           return next;
                         })}
-                      />
-                      <span className="min-w-0 space-y-1">
+                      />}
+                      <span className="min-w-0 flex-1 space-y-1">
                         <span className="flex flex-wrap items-center gap-x-2 text-xs">
                           <span className="font-mono tabular-nums text-primary">{formatTime(segment.startMs / 1000)}</span>
                           <span className="font-medium text-foreground">{segment.speaker}</span>
                         </span>
-                        <span className="block break-words text-sm text-muted-foreground">{segment.text}</span>
+                        <Textarea rows={2} aria-label={`Correct text at ${formatTime(segment.startMs / 1000)}`} value={reviewEdits[segment.id] ?? segment.text} onChange={(e) => { const v = e.target.value; setReviewEdits((cur) => ({ ...cur, [segment.id]: v })); }} className="text-sm" />
                       </span>
-                    </label>
+                    </div>
                   ))}
                 </div>
               ) : (
@@ -1128,7 +1128,7 @@ function SessionPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPdfReviewOpen(false)}>Cancel</Button>
-            <Button onClick={generateReviewedPdf}><FileText className="size-4" /> Generate PDF</Button>
+            <Button onClick={generateReviewedExport}><FileText className="size-4" /> {reviewKind === "pdf" ? "Generate PDF" : "Export"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1231,4 +1231,22 @@ function PermissionDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function Highlight({ text, query }: { text: string; query: string }): ReactNode {
+  if (!query) return text;
+  const lower = text.toLowerCase();
+  const q = query.toLowerCase();
+  const parts: ReactNode[] = [];
+  let i = 0;
+  let k = 0;
+  while (true) {
+    const j = lower.indexOf(q, i);
+    if (j < 0) break;
+    if (j > i) parts.push(text.slice(i, j));
+    parts.push(<mark key={k++} className="rounded-sm bg-warning/30 text-foreground px-0.5">{text.slice(j, j + q.length)}</mark>);
+    i = j + q.length;
+  }
+  parts.push(text.slice(i));
+  return <>{parts}</>;
 }
