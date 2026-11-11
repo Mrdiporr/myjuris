@@ -31,7 +31,8 @@ import { usePlaybackUrl } from "@/hooks/usePlaybackUrl";
 import { useExportJob, type ExportKind } from "@/hooks/useExportJob";
 import { Checkbox } from "@/components/ui/checkbox";
 import { redactTranscriptSnapshot } from "@/lib/transcript-redaction";
-import { applyTextCorrection, reviewEditDiffers } from "@/lib/transcript-corrections";
+import { applyReviewedCorrections, applyTextCorrection } from "@/lib/transcript-corrections";
+import { resolveSessionDuration } from "@/lib/session-archive";
 import type { ReactNode } from "react";
 
 export const Route = createFileRoute("/_authenticated/cases/$caseId/sessions/$sessionId")({
@@ -90,6 +91,7 @@ function SessionPage() {
   const [permissionDialog, setPermissionDialog] = useState(false);
   const [consentDialog, setConsentDialog] = useState(false);
   const [pdfReviewOpen, setPdfReviewOpen] = useState(false);
+  const [savingReview, setSavingReview] = useState(false);
   const [pdfReviewTranscript, setPdfReviewTranscript] = useState<TranscriptSegment[] | null>(null);
   const [redactedSegmentIds, setRedactedSegmentIds] = useState<Set<string>>(new Set());
   const [redactedSpeakerLabels, setRedactedSpeakerLabels] = useState<Set<string>>(new Set());
@@ -228,7 +230,7 @@ function SessionPage() {
 
   const [restoredDuration, setRestoredDuration] = useState(0);
   const durationRef = useRef(0);
-  durationRef.current = recorder.durationSeconds || restoredDuration;
+  durationRef.current = resolveSessionDuration(recorder.durationSeconds, restoredDuration, session?.duration_seconds ?? 0);
 
   // Load session + case
   useEffect(() => {
@@ -467,16 +469,48 @@ function SessionPage() {
     }
   };
 
-  /** Quick-correct one segment's text on the session page; original wording + history stay in the archive. */
-  const commitTextCorrection = (segmentId: string) => {
+  const persistTranscriptSnapshot = async (transcriptSnapshot: TranscriptSegment[], successMessage: string) => {
+    setPersisting(true);
+    try {
+      const duration = Math.round(resolveSessionDuration(
+        recorder.durationSeconds,
+        restoredDuration,
+        session?.duration_seconds ?? 0,
+      ));
+      await updateSessionFn({
+        data: {
+          sessionId,
+          caseId,
+          patch: {
+            transcript: transcriptSnapshot as unknown[],
+            bookmarks: bookmarks as unknown[],
+            duration_seconds: duration,
+          },
+        },
+      });
+      setSession((prev) => (prev ? { ...prev, transcript: transcriptSnapshot, duration_seconds: duration } : prev));
+      toast.success(successMessage);
+      void loadAudit();
+      return true;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save transcript");
+      return false;
+    } finally {
+      setPersisting(false);
+    }
+  };
+
+  /** Quick-correct one segment and save the archive history before confirming success. */
+  const commitTextCorrection = async (segmentId: string) => {
     const seg = transcript.find((s) => s.id === segmentId);
     const value = editingText?.id === segmentId ? editingText.value : undefined;
     setEditingText(null);
     if (!seg || value == null) return;
     const next = applyTextCorrection(seg, value);
     if (!next) return;
-    setTranscript((prev) => prev.map((s) => (s.id === segmentId ? next : s)));
-    toast.success("Correction applied", { description: "Exports use the corrected text; the original wording stays in the archive." });
+    const updatedTranscript = transcript.map((s) => (s.id === segmentId ? next : s));
+    setTranscript(updatedTranscript);
+    await persistTranscriptSnapshot(updatedTranscript, "Correction saved to the archive");
   };
 
   const loadAudit = async () => {
@@ -489,26 +523,7 @@ function SessionPage() {
   useEffect(() => { loadAudit(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [sessionId]);
 
   const saveTranscriptOnly = async () => {
-    setPersisting(true);
-    try {
-      await updateSessionFn({
-        data: {
-          sessionId,
-          caseId,
-          patch: {
-            transcript: transcript as unknown[],
-            bookmarks: bookmarks as unknown[],
-            duration_seconds: Math.round(durationRef.current),
-          },
-        },
-      });
-      toast.success("Saved");
-      loadAudit();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
-    } finally {
-      setPersisting(false);
-    }
+    await persistTranscriptSnapshot(transcript, "Saved");
   };
 
   // Export job — single toast surface with progress, retry, and cancel.
@@ -559,18 +574,19 @@ function SessionPage() {
   );
   /** Commits reviewed text edits into the archive (original + history kept),
    * then runs the export with the corrected copy. */
-  const generateReviewedExport = () => {
+  const generateReviewedExport = async () => {
     if (!pdfReviewTranscript) return;
-    let corrected = 0;
-    const archived: TranscriptSegment[] = transcript.map((s) => {
-      const reviewedText = reviewEdits[s.id];
-      if (!reviewEditDiffers(s, reviewedText)) return s;
-      const next = applyTextCorrection(s, reviewedText);
-      if (!next) return s;
-      corrected += 1;
-      return next;
-    });
-    if (corrected > 0) setTranscript(archived);
+    const archived = applyReviewedCorrections(pdfReviewTranscript, reviewEdits);
+    const hasCorrections = archived.some((segment, index) =>
+      (segment.corrections?.length ?? 0) > (pdfReviewTranscript[index]?.corrections?.length ?? 0),
+    );
+    if (hasCorrections) {
+      setSavingReview(true);
+      const saved = await persistTranscriptSnapshot(archived, "Review corrections saved to the archive");
+      setSavingReview(false);
+      if (!saved) return;
+    }
+    setTranscript(archived);
     const showRedactions = reviewKind === "pdf";
     const exportCopy = redactTranscriptSnapshot(
       archived,
@@ -600,7 +616,12 @@ function SessionPage() {
   const visibleTimeline = useMemo<TimelineItem[]>(() => {
     if (!searching) return timeline;
     return timeline.filter((item) =>
-      item.kind === "flag" ? matchesQuery(item.flag.label) : matchesQuery(item.seg.text) || matchesQuery(item.seg.speaker),
+      item.kind === "flag"
+        ? matchesQuery(item.flag.label)
+        : matchesQuery(item.seg.text) ||
+          matchesQuery(item.seg.speaker) ||
+          matchesQuery(item.seg.originalText ?? "") ||
+          (item.seg.corrections ?? []).some((correction) => matchesQuery(correction.from) || matchesQuery(correction.to)),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeline, searching, searchQueryTrimmed]);
