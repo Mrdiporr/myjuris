@@ -447,6 +447,11 @@ function SessionPage() {
       window.setTimeout(() => setSearchHitId(null), 2500);
     } else {
       scrollToTime(timeMs);
+      const target = [...transcript].sort((a, b) => a.startMs - b.startMs).filter((s) => s.startMs <= timeMs).pop() ?? transcript[0];
+      if (target && !segmentRefs.current[target.id] && searchQuery.trim()) {
+        setSearchQuery("");
+        window.setTimeout(() => segmentRefs.current[target.id]?.scrollIntoView({ behavior: "smooth", block: "center" }), 100);
+      }
     }
   };
 
@@ -930,7 +935,15 @@ function SessionPage() {
                       className={`group rounded-md px-1.5 py-0.5 -mx-1.5 transition-shadow ${searchHitId === item.seg.id ? "ring-2 ring-primary bg-primary/5" : ""}`}
                     >
                       <div className="flex items-baseline gap-2 mb-0.5 flex-wrap">
-                        <span className="text-[11px] font-mono text-primary tabular-nums">{formatTime(item.seg.startMs / 1000)}</span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`Play from ${formatTime(item.seg.startMs / 1000)}`}
+                          onClick={() => jumpToMoment(item.seg.startMs, item.seg.id)}
+                          className="h-5 px-1 text-[11px] font-mono text-primary tabular-nums"
+                        >
+                          {formatTime(item.seg.startMs / 1000)}
+                        </Button>
                         {editingSpeaker?.id === item.seg.id ? (
                           <SpeakerEditor
                             value={editingSpeaker.value}
@@ -961,16 +974,16 @@ function SessionPage() {
                             rows={2}
                             value={editingText.value}
                             onChange={(e) => setEditingText((s) => (s ? { ...s, value: e.target.value } : s))}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commitTextCorrection(item.seg.id); }
+                              onKeyDown={(e) => {
+                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void commitTextCorrection(item.seg.id); }
                               if (e.key === "Escape") { e.preventDefault(); setEditingText(null); }
                             }}
                             className="text-sm"
                           />
                           <div className="flex items-center gap-2">
-                            <Button size="sm" className="h-6 px-2 text-[11px]" onClick={() => commitTextCorrection(item.seg.id)}>Save correction</Button>
+                            <Button size="sm" className="h-6 px-2 text-[11px]" onClick={() => void commitTextCorrection(item.seg.id)} disabled={persisting}>Save correction</Button>
                             <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setEditingText(null)}>Cancel</Button>
-                            <span className="text-[10px] text-muted-foreground">Enter/⌘+Enter saves · Esc cancels</span>
+                            <span className="text-[10px] text-muted-foreground">Ctrl+Enter or ⌘+Enter saves · Esc cancels</span>
                           </div>
                         </div>
                       ) : (
@@ -986,6 +999,19 @@ function SessionPage() {
                         <p className="mt-0.5 pl-1 text-[11px] text-muted-foreground/80 italic" title="Original wording (kept in the archive)">
                           Original: <Highlight text={item.seg.originalText} query={searchQueryTrimmed} />
                         </p>
+                      )}
+                      {(item.seg.corrections?.length ?? 0) > 0 && editingText?.id !== item.seg.id && (
+                        <details className="mt-1 pl-1 text-[11px] text-muted-foreground">
+                          <summary className="w-fit cursor-pointer">Edit history ({item.seg.corrections?.length})</summary>
+                          <ol className="mt-1 space-y-1 border-l border-border pl-3">
+                            {item.seg.corrections?.map((correction, index) => (
+                              <li key={`${correction.at}-${index}`}>
+                                <span className="block">{correction.from} → {correction.to}</span>
+                                <time dateTime={correction.at}>{new Date(correction.at).toLocaleString()}</time>
+                              </li>
+                            ))}
+                          </ol>
+                        </details>
                       )}
                     </div>
                   ),
@@ -1149,7 +1175,7 @@ function SessionPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPdfReviewOpen(false)}>Cancel</Button>
-            <Button onClick={generateReviewedExport}><FileText className="size-4" /> {reviewKind === "pdf" ? "Generate PDF" : "Export"}</Button>
+            <Button onClick={() => void generateReviewedExport()} disabled={savingReview || persisting}><FileText className="size-4" /> {savingReview ? <Loader2 className="size-4 animate-spin" /> : null}{reviewKind === "pdf" ? "Generate PDF" : "Export"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
