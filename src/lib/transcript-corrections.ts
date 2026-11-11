@@ -32,3 +32,15 @@ export function reviewEditDiffers(segment: TranscriptSegment, reviewedText: stri
   const to = reviewedText.replace(/\s+/g, " ").trim();
   return !!to && to !== segment.text;
 }
+
+/** Apply edits to the exact transcript snapshot shown in pre-export review. */
+export function applyReviewedCorrections(
+  snapshot: readonly TranscriptSegment[],
+  edits: Readonly<Record<string, string>>,
+): TranscriptSegment[] {
+  return snapshot.map((segment) => {
+    const reviewedText = edits[segment.id];
+    if (reviewedText === undefined) return { ...segment };
+    return applyTextCorrection(segment, reviewedText) ?? { ...segment };
+  });
+}

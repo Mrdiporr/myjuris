@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyTextCorrection, reviewEditDiffers } from "@/lib/transcript-corrections";
+import { applyReviewedCorrections, applyTextCorrection, reviewEditDiffers } from "@/lib/transcript-corrections";
 import { redactTranscriptSnapshot } from "@/lib/transcript-redaction";
 import type { TranscriptSegment } from "@/lib/types";
 
@@ -53,6 +53,28 @@ describe("reviewEditDiffers", () => {
     expect(reviewEditDiffers(s, "The court is in session")).toBe(false);
     expect(reviewEditDiffers(s, "  The court is   in session ")).toBe(false);
     expect(reviewEditDiffers(s, "Actually adjourned")).toBe(true);
+  });
+});
+
+describe("applyReviewedCorrections", () => {
+  it("edits only the reviewed snapshot, keeping archive history and source rows intact", () => {
+    const source = [
+      seg({ id: "reviewed", startMs: 1200, endMs: 2400 }),
+      seg({ id: "unchanged", text: "Unchanged wording", startMs: 3000, endMs: 4200 }),
+    ];
+    const before = JSON.stringify(source);
+    const reviewed = applyReviewedCorrections(source, { reviewed: "Corrected wording" });
+
+    expect(reviewed).toEqual([
+      {
+        ...source[0],
+        text: "Corrected wording",
+        originalText: "The court is in session",
+        corrections: [{ from: "The court is in session", to: "Corrected wording", at: expect.any(String) }],
+      },
+      source[1],
+    ]);
+    expect(JSON.stringify(source)).toBe(before);
   });
 });
 
