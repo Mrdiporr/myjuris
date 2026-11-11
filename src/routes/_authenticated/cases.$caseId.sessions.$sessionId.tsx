@@ -433,7 +433,7 @@ function SessionPage() {
   };
 
   /** Jump to a moment: seek the recording to that time and bring the matching point into view. */
-  const jumpToMoment = (timeMs: number, exactId?: string) => {
+  const jumpToMoment = (timeMs: number, exactId?: string, visualHitId?: string) => {
     const audio = audioRef.current;
     if (audio && Number.isFinite(timeMs)) {
       try {
@@ -443,8 +443,6 @@ function SessionPage() {
     }
     if (exactId) {
       segmentRefs.current[exactId]?.scrollIntoView({ behavior: "smooth", block: "center" });
-      setSearchHitId(exactId);
-      window.setTimeout(() => setSearchHitId(null), 2500);
     } else {
       scrollToTime(timeMs);
       const target = [...transcript].sort((a, b) => a.startMs - b.startMs).filter((s) => s.startMs <= timeMs).pop() ?? transcript[0];
@@ -452,6 +450,11 @@ function SessionPage() {
         setSearchQuery("");
         window.setTimeout(() => segmentRefs.current[target.id]?.scrollIntoView({ behavior: "smooth", block: "center" }), 100);
       }
+    }
+    if (visualHitId || exactId) {
+      const hitId = visualHitId ?? exactId;
+      setSearchHitId(hitId ?? null);
+      window.setTimeout(() => setSearchHitId(null), 2500);
     }
   };
 
@@ -924,7 +927,7 @@ function SessionPage() {
                       type="button"
                       key={`flag-${item.flag.id}`}
                       id={`flag-${item.flag.id}`}
-                      onClick={() => jumpToMoment(item.time)}
+                      onClick={() => jumpToMoment(item.time, undefined, item.flag.id)}
                       className={`w-full text-left flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-1.5 transition-shadow cursor-pointer ${searchHitId === item.flag.id ? "ring-2 ring-warning" : "hover:shadow-elevated"}`}
                       title="Jump to this moment in the recording"
                     >
@@ -1047,7 +1050,7 @@ function SessionPage() {
                   {sortedBookmarks.map((b) => (
                     <li key={b.id} className="flex items-start gap-3 p-2.5 rounded-md bg-muted/40 border border-border">
                       <button
-                        onClick={() => jumpToMoment(b.timeMs)}
+                        onClick={() => jumpToMoment(b.timeMs, undefined, b.id)}
                         className="flex items-start gap-3 flex-1 text-left min-w-0"
                         title="Jump to this moment in the recording"
                       >
