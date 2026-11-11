@@ -549,6 +549,14 @@ function SessionPage() {
       toast.error("Session not ready to export");
       return;
     }
+    if ((kind === "audio" || kind === "both") && !localBlob && !cloudAudioBlob) {
+      toast.error("No audio available", { description: "Record or upload audio first." });
+      return;
+    }
+    if (kind !== "audio" && (recorder.state === "recording" || recorder.state === "paused")) {
+      toast.error("Stop recording before reviewing an export", { description: "This keeps the transcript snapshot stable during review." });
+      return;
+    }
     if (kind === "pdf" || kind === "docx" || kind === "both") {
       setReviewKind(kind);
       setPdfReviewTranscript(transcript.map((segment) => ({ ...segment })));
@@ -556,10 +564,6 @@ function SessionPage() {
       setRedactedSpeakerLabels(new Set());
       setReviewEdits({});
       setPdfReviewOpen(true);
-      return;
-    }
-    if ((kind === "audio" || kind === "both") && !localBlob && !cloudAudioBlob) {
-      toast.error("No audio available", { description: "Record or upload audio first." });
       return;
     }
     exportJob.run(kind);
@@ -1117,7 +1121,7 @@ function SessionPage() {
           <DialogHeader>
             <DialogTitle>Review before export</DialogTitle>
             <DialogDescription>
-              {reviewKind === "pdf" ? "Correct recognition errors and select lines or speaker labels to replace with [REDACTED] in this PDF only." : "Correct recognition errors before exporting."} Corrections are saved to the transcript; the original wording and edit history stay in the archive.
+              {reviewKind === "pdf" ? "Correct recognition errors and select lines or speaker labels to replace with [REDACTED] in this PDF only." : "Correct recognition errors before exporting."} Accepted corrections are saved to the transcript; the original wording and edit history stay in the archive.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5 max-h-[65vh] overflow-y-auto pr-1">
