@@ -31,7 +31,8 @@ import { usePlaybackUrl } from "@/hooks/usePlaybackUrl";
 import { useExportJob, type ExportKind } from "@/hooks/useExportJob";
 import { Checkbox } from "@/components/ui/checkbox";
 import { redactTranscriptSnapshot } from "@/lib/transcript-redaction";
-import { applyTextCorrection, reviewEditDiffers } from "@/lib/transcript-corrections";
+import { applyReviewedCorrections, applyTextCorrection } from "@/lib/transcript-corrections";
+import { resolveSessionDuration } from "@/lib/session-archive";
 import type { ReactNode } from "react";
 
 export const Route = createFileRoute("/_authenticated/cases/$caseId/sessions/$sessionId")({
@@ -90,6 +91,7 @@ function SessionPage() {
   const [permissionDialog, setPermissionDialog] = useState(false);
   const [consentDialog, setConsentDialog] = useState(false);
   const [pdfReviewOpen, setPdfReviewOpen] = useState(false);
+  const [savingReview, setSavingReview] = useState(false);
   const [pdfReviewTranscript, setPdfReviewTranscript] = useState<TranscriptSegment[] | null>(null);
   const [redactedSegmentIds, setRedactedSegmentIds] = useState<Set<string>>(new Set());
   const [redactedSpeakerLabels, setRedactedSpeakerLabels] = useState<Set<string>>(new Set());
@@ -228,7 +230,7 @@ function SessionPage() {
 
   const [restoredDuration, setRestoredDuration] = useState(0);
   const durationRef = useRef(0);
-  durationRef.current = recorder.durationSeconds || restoredDuration;
+  durationRef.current = resolveSessionDuration(recorder.durationSeconds, restoredDuration, session?.duration_seconds ?? 0);
 
   // Load session + case
   useEffect(() => {
@@ -431,7 +433,7 @@ function SessionPage() {
   };
 
   /** Jump to a moment: seek the recording to that time and bring the matching point into view. */
-  const jumpToMoment = (timeMs: number, exactId?: string) => {
+  const jumpToMoment = (timeMs: number, exactId?: string, visualHitId?: string) => {
     const audio = audioRef.current;
     if (audio && Number.isFinite(timeMs)) {
       try {
@@ -441,10 +443,18 @@ function SessionPage() {
     }
     if (exactId) {
       segmentRefs.current[exactId]?.scrollIntoView({ behavior: "smooth", block: "center" });
-      setSearchHitId(exactId);
-      window.setTimeout(() => setSearchHitId(null), 2500);
     } else {
       scrollToTime(timeMs);
+      const target = [...transcript].sort((a, b) => a.startMs - b.startMs).filter((s) => s.startMs <= timeMs).pop() ?? transcript[0];
+      if (target && !segmentRefs.current[target.id] && searchQuery.trim()) {
+        setSearchQuery("");
+        window.setTimeout(() => segmentRefs.current[target.id]?.scrollIntoView({ behavior: "smooth", block: "center" }), 100);
+      }
+    }
+    if (visualHitId || exactId) {
+      const hitId = visualHitId ?? exactId;
+      setSearchHitId(hitId ?? null);
+      window.setTimeout(() => setSearchHitId(null), 2500);
     }
   };
 
@@ -467,16 +477,48 @@ function SessionPage() {
     }
   };
 
-  /** Quick-correct one segment's text on the session page; original wording + history stay in the archive. */
-  const commitTextCorrection = (segmentId: string) => {
+  const persistTranscriptSnapshot = async (transcriptSnapshot: TranscriptSegment[], successMessage: string) => {
+    setPersisting(true);
+    try {
+      const duration = Math.round(resolveSessionDuration(
+        recorder.durationSeconds,
+        restoredDuration,
+        session?.duration_seconds ?? 0,
+      ));
+      await updateSessionFn({
+        data: {
+          sessionId,
+          caseId,
+          patch: {
+            transcript: transcriptSnapshot as unknown[],
+            bookmarks: bookmarks as unknown[],
+            duration_seconds: duration,
+          },
+        },
+      });
+      setSession((prev) => (prev ? { ...prev, transcript: transcriptSnapshot, duration_seconds: duration } : prev));
+      toast.success(successMessage);
+      void loadAudit();
+      return true;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save transcript");
+      return false;
+    } finally {
+      setPersisting(false);
+    }
+  };
+
+  /** Quick-correct one segment and save the archive history before confirming success. */
+  const commitTextCorrection = async (segmentId: string) => {
     const seg = transcript.find((s) => s.id === segmentId);
     const value = editingText?.id === segmentId ? editingText.value : undefined;
     setEditingText(null);
     if (!seg || value == null) return;
     const next = applyTextCorrection(seg, value);
     if (!next) return;
-    setTranscript((prev) => prev.map((s) => (s.id === segmentId ? next : s)));
-    toast.success("Correction applied", { description: "Exports use the corrected text; the original wording stays in the archive." });
+    const updatedTranscript = transcript.map((s) => (s.id === segmentId ? next : s));
+    setTranscript(updatedTranscript);
+    await persistTranscriptSnapshot(updatedTranscript, "Correction saved to the archive");
   };
 
   const loadAudit = async () => {
@@ -489,26 +531,7 @@ function SessionPage() {
   useEffect(() => { loadAudit(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [sessionId]);
 
   const saveTranscriptOnly = async () => {
-    setPersisting(true);
-    try {
-      await updateSessionFn({
-        data: {
-          sessionId,
-          caseId,
-          patch: {
-            transcript: transcript as unknown[],
-            bookmarks: bookmarks as unknown[],
-            duration_seconds: Math.round(durationRef.current),
-          },
-        },
-      });
-      toast.success("Saved");
-      loadAudit();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
-    } finally {
-      setPersisting(false);
-    }
+    await persistTranscriptSnapshot(transcript, "Saved");
   };
 
   // Export job — single toast surface with progress, retry, and cancel.
@@ -529,6 +552,14 @@ function SessionPage() {
       toast.error("Session not ready to export");
       return;
     }
+    if ((kind === "audio" || kind === "both") && !localBlob && !cloudAudioBlob) {
+      toast.error("No audio available", { description: "Record or upload audio first." });
+      return;
+    }
+    if (kind !== "audio" && (recorder.state === "recording" || recorder.state === "paused")) {
+      toast.error("Stop recording before reviewing an export", { description: "This keeps the transcript snapshot stable during review." });
+      return;
+    }
     if (kind === "pdf" || kind === "docx" || kind === "both") {
       setReviewKind(kind);
       setPdfReviewTranscript(transcript.map((segment) => ({ ...segment })));
@@ -536,10 +567,6 @@ function SessionPage() {
       setRedactedSpeakerLabels(new Set());
       setReviewEdits({});
       setPdfReviewOpen(true);
-      return;
-    }
-    if ((kind === "audio" || kind === "both") && !localBlob && !cloudAudioBlob) {
-      toast.error("No audio available", { description: "Record or upload audio first." });
       return;
     }
     exportJob.run(kind);
@@ -559,18 +586,19 @@ function SessionPage() {
   );
   /** Commits reviewed text edits into the archive (original + history kept),
    * then runs the export with the corrected copy. */
-  const generateReviewedExport = () => {
+  const generateReviewedExport = async () => {
     if (!pdfReviewTranscript) return;
-    let corrected = 0;
-    const archived: TranscriptSegment[] = transcript.map((s) => {
-      const reviewedText = reviewEdits[s.id];
-      if (!reviewEditDiffers(s, reviewedText)) return s;
-      const next = applyTextCorrection(s, reviewedText);
-      if (!next) return s;
-      corrected += 1;
-      return next;
-    });
-    if (corrected > 0) setTranscript(archived);
+    const archived = applyReviewedCorrections(pdfReviewTranscript, reviewEdits);
+    const hasCorrections = archived.some((segment, index) =>
+      (segment.corrections?.length ?? 0) > (pdfReviewTranscript[index]?.corrections?.length ?? 0),
+    );
+    if (hasCorrections) {
+      setSavingReview(true);
+      const saved = await persistTranscriptSnapshot(archived, "Review corrections saved to the archive");
+      setSavingReview(false);
+      if (!saved) return;
+    }
+    setTranscript(archived);
     const showRedactions = reviewKind === "pdf";
     const exportCopy = redactTranscriptSnapshot(
       archived,
@@ -600,7 +628,12 @@ function SessionPage() {
   const visibleTimeline = useMemo<TimelineItem[]>(() => {
     if (!searching) return timeline;
     return timeline.filter((item) =>
-      item.kind === "flag" ? matchesQuery(item.flag.label) : matchesQuery(item.seg.text) || matchesQuery(item.seg.speaker),
+      item.kind === "flag"
+        ? matchesQuery(item.flag.label)
+        : matchesQuery(item.seg.text) ||
+          matchesQuery(item.seg.speaker) ||
+          matchesQuery(item.seg.originalText ?? "") ||
+          (item.seg.corrections ?? []).some((correction) => matchesQuery(correction.from) || matchesQuery(correction.to)),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeline, searching, searchQueryTrimmed]);
@@ -894,7 +927,7 @@ function SessionPage() {
                       type="button"
                       key={`flag-${item.flag.id}`}
                       id={`flag-${item.flag.id}`}
-                      onClick={() => jumpToMoment(item.time)}
+                      onClick={() => jumpToMoment(item.time, undefined, item.flag.id)}
                       className={`w-full text-left flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-1.5 transition-shadow cursor-pointer ${searchHitId === item.flag.id ? "ring-2 ring-warning" : "hover:shadow-elevated"}`}
                       title="Jump to this moment in the recording"
                     >
@@ -909,7 +942,15 @@ function SessionPage() {
                       className={`group rounded-md px-1.5 py-0.5 -mx-1.5 transition-shadow ${searchHitId === item.seg.id ? "ring-2 ring-primary bg-primary/5" : ""}`}
                     >
                       <div className="flex items-baseline gap-2 mb-0.5 flex-wrap">
-                        <span className="text-[11px] font-mono text-primary tabular-nums">{formatTime(item.seg.startMs / 1000)}</span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`Play from ${formatTime(item.seg.startMs / 1000)}`}
+                          onClick={() => jumpToMoment(item.seg.startMs, item.seg.id)}
+                          className="h-5 px-1 text-[11px] font-mono text-primary tabular-nums"
+                        >
+                          {formatTime(item.seg.startMs / 1000)}
+                        </Button>
                         {editingSpeaker?.id === item.seg.id ? (
                           <SpeakerEditor
                             value={editingSpeaker.value}
@@ -940,16 +981,16 @@ function SessionPage() {
                             rows={2}
                             value={editingText.value}
                             onChange={(e) => setEditingText((s) => (s ? { ...s, value: e.target.value } : s))}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commitTextCorrection(item.seg.id); }
+                              onKeyDown={(e) => {
+                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void commitTextCorrection(item.seg.id); }
                               if (e.key === "Escape") { e.preventDefault(); setEditingText(null); }
                             }}
                             className="text-sm"
                           />
                           <div className="flex items-center gap-2">
-                            <Button size="sm" className="h-6 px-2 text-[11px]" onClick={() => commitTextCorrection(item.seg.id)}>Save correction</Button>
+                            <Button size="sm" className="h-6 px-2 text-[11px]" onClick={() => void commitTextCorrection(item.seg.id)} disabled={persisting}>Save correction</Button>
                             <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setEditingText(null)}>Cancel</Button>
-                            <span className="text-[10px] text-muted-foreground">Enter/⌘+Enter saves · Esc cancels</span>
+                            <span className="text-[10px] text-muted-foreground">Ctrl+Enter or ⌘+Enter saves · Esc cancels</span>
                           </div>
                         </div>
                       ) : (
@@ -965,6 +1006,19 @@ function SessionPage() {
                         <p className="mt-0.5 pl-1 text-[11px] text-muted-foreground/80 italic" title="Original wording (kept in the archive)">
                           Original: <Highlight text={item.seg.originalText} query={searchQueryTrimmed} />
                         </p>
+                      )}
+                      {(item.seg.corrections?.length ?? 0) > 0 && editingText?.id !== item.seg.id && (
+                        <details className="mt-1 pl-1 text-[11px] text-muted-foreground">
+                          <summary className="w-fit cursor-pointer">Edit history ({item.seg.corrections?.length})</summary>
+                          <ol className="mt-1 space-y-1 border-l border-border pl-3">
+                            {item.seg.corrections?.map((correction, index) => (
+                              <li key={`${correction.at}-${index}`}>
+                                <span className="block">{correction.from} → {correction.to}</span>
+                                <time dateTime={correction.at}>{new Date(correction.at).toLocaleString()}</time>
+                              </li>
+                            ))}
+                          </ol>
+                        </details>
                       )}
                     </div>
                   ),
@@ -996,7 +1050,7 @@ function SessionPage() {
                   {sortedBookmarks.map((b) => (
                     <li key={b.id} className="flex items-start gap-3 p-2.5 rounded-md bg-muted/40 border border-border">
                       <button
-                        onClick={() => jumpToMoment(b.timeMs)}
+                        onClick={() => jumpToMoment(b.timeMs, undefined, b.id)}
                         className="flex items-start gap-3 flex-1 text-left min-w-0"
                         title="Jump to this moment in the recording"
                       >
@@ -1070,7 +1124,7 @@ function SessionPage() {
           <DialogHeader>
             <DialogTitle>Review before export</DialogTitle>
             <DialogDescription>
-              {reviewKind === "pdf" ? "Correct recognition errors and select lines or speaker labels to replace with [REDACTED] in this PDF only." : "Correct recognition errors before exporting."} Corrections are saved to the transcript; the original wording and edit history stay in the archive.
+              {reviewKind === "pdf" ? "Correct recognition errors and select lines or speaker labels to replace with [REDACTED] in this PDF only." : "Correct recognition errors before exporting."} Accepted corrections are saved to the transcript; the original wording and edit history stay in the archive.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5 max-h-[65vh] overflow-y-auto pr-1">
@@ -1128,7 +1182,7 @@ function SessionPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPdfReviewOpen(false)}>Cancel</Button>
-            <Button onClick={generateReviewedExport}><FileText className="size-4" /> {reviewKind === "pdf" ? "Generate PDF" : "Export"}</Button>
+            <Button onClick={() => void generateReviewedExport()} disabled={savingReview || persisting}><FileText className="size-4" /> {savingReview ? <Loader2 className="size-4 animate-spin" /> : null}{reviewKind === "pdf" ? "Generate PDF" : "Export"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
