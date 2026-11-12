@@ -1195,7 +1195,7 @@ function SessionPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPdfReviewOpen(false)}>Cancel</Button>
-            <Button onClick={() => void generateReviewedExport()} disabled={savingReview || persisting}><FileText className="size-4" /> {savingReview ? <Loader2 className="size-4 animate-spin" /> : null}{reviewKind === "pdf" ? "Generate PDF" : "Export"}</Button>
+            <Button onClick={() => void generateReviewedPdf()} disabled={savingReview || persisting}><FileText className="size-4" /> {savingReview ? <Loader2 className="size-4 animate-spin" /> : null}{reviewKind === "pdf" ? "Generate PDF" : "Export"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
