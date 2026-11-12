@@ -4,5 +4,7 @@ export function resolveSessionDuration(
   restoredDuration: number,
   savedDuration: number,
 ): number {
-  return Math.max(0, recorderDuration, restoredDuration, savedDuration);
+  const activeDuration = recorderDuration > 0 ? recorderDuration : restoredDuration;
+  const duration = activeDuration > 0 ? activeDuration : savedDuration;
+  return Number.isFinite(duration) ? Math.max(0, duration) : 0;
 }

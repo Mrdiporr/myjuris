@@ -512,13 +512,21 @@ function SessionPage() {
   const commitTextCorrection = async (segmentId: string) => {
     const seg = transcript.find((s) => s.id === segmentId);
     const value = editingText?.id === segmentId ? editingText.value : undefined;
-    setEditingText(null);
-    if (!seg || value == null) return;
+    if (!seg || value == null) {
+      setEditingText(null);
+      return;
+    }
     const next = applyTextCorrection(seg, value);
-    if (!next) return;
+    if (!next) {
+      setEditingText(null);
+      return;
+    }
     const updatedTranscript = transcript.map((s) => (s.id === segmentId ? next : s));
-    setTranscript(updatedTranscript);
-    await persistTranscriptSnapshot(updatedTranscript, "Correction saved to the archive");
+    const saved = await persistTranscriptSnapshot(updatedTranscript, "Correction saved to the archive");
+    if (saved) {
+      setTranscript(updatedTranscript);
+      setEditingText(null);
+    }
   };
 
   const loadAudit = async () => {
@@ -906,7 +914,7 @@ function SessionPage() {
                 <p className="mt-1.5 text-[11px] text-muted-foreground">
                   {visibleTimeline.length === 0
                     ? "No transcript lines or bookmarks match."
-                    : `${visibleTimeline.length} match${visibleTimeline.length === 1 ? "" : "es"} — click one to jump to that moment in the recording.`}
+                    : `${visibleTimeline.length} match${visibleTimeline.length === 1 ? "" : "es"}`}
                 </p>
               )}
             </div>
@@ -959,14 +967,15 @@ function SessionPage() {
                             onSave={(all: boolean) => applySpeakerRename(item.seg.id, editingSpeaker!.original, editingSpeaker!.value, all)}
                           />
                         ) : (
-                          <button
-                            type="button"
+                          <Button
+                            size="sm"
+                            variant="ghost"
                             onClick={() => setEditingSpeaker({ id: item.seg.id, original: item.seg.speaker, value: item.seg.speaker })}
-                            className="text-xs font-medium text-foreground/90 rounded px-1 -mx-1 hover:bg-muted hover:text-primary transition-colors"
+                            className="h-auto px-1 py-0 text-xs font-medium text-foreground/90 hover:text-primary"
                             title="Click to rename this speaker"
                           >
                             {item.seg.speaker}
-                          </button>
+                          </Button>
                         )}
                         {(item.seg.corrections?.length ?? 0) > 0 && (
                           <Badge variant="outline" className="text-[9px]" title="Edited — the original wording is kept in the archive">
@@ -990,17 +999,18 @@ function SessionPage() {
                           <div className="flex items-center gap-2">
                             <Button size="sm" className="h-6 px-2 text-[11px]" onClick={() => void commitTextCorrection(item.seg.id)} disabled={persisting}>Save correction</Button>
                             <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setEditingText(null)}>Cancel</Button>
-                            <span className="text-[10px] text-muted-foreground">Ctrl+Enter or ⌘+Enter saves · Esc cancels</span>
                           </div>
                         </div>
                       ) : (
-                        <p
+                        <Button
+                          size="sm"
+                          variant="ghost"
                           onClick={() => setEditingText({ id: item.seg.id, value: item.seg.text })}
-                          title="Click to correct this text"
-                          className="text-sm leading-relaxed text-foreground/95 pl-1 cursor-text"
+                          title="Edit transcript text"
+                          className="h-auto min-h-0 w-full justify-start whitespace-normal px-1 py-0 text-left text-sm font-normal leading-relaxed text-foreground/95"
                         >
                           <Highlight text={item.seg.text} query={searchQueryTrimmed} />
-                        </p>
+                        </Button>
                       )}
                       {item.seg.originalText && editingText?.id !== item.seg.id && (
                         <p className="mt-0.5 pl-1 text-[11px] text-muted-foreground/80 italic" title="Original wording (kept in the archive)">
