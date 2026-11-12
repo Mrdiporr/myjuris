@@ -512,13 +512,21 @@ function SessionPage() {
   const commitTextCorrection = async (segmentId: string) => {
     const seg = transcript.find((s) => s.id === segmentId);
     const value = editingText?.id === segmentId ? editingText.value : undefined;
-    setEditingText(null);
-    if (!seg || value == null) return;
+    if (!seg || value == null) {
+      setEditingText(null);
+      return;
+    }
     const next = applyTextCorrection(seg, value);
-    if (!next) return;
+    if (!next) {
+      setEditingText(null);
+      return;
+    }
     const updatedTranscript = transcript.map((s) => (s.id === segmentId ? next : s));
     const saved = await persistTranscriptSnapshot(updatedTranscript, "Correction saved to the archive");
-    if (saved) setTranscript(updatedTranscript);
+    if (saved) {
+      setTranscript(updatedTranscript);
+      setEditingText(null);
+    }
   };
 
   const loadAudit = async () => {
