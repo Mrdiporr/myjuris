@@ -517,8 +517,8 @@ function SessionPage() {
     const next = applyTextCorrection(seg, value);
     if (!next) return;
     const updatedTranscript = transcript.map((s) => (s.id === segmentId ? next : s));
-    setTranscript(updatedTranscript);
-    await persistTranscriptSnapshot(updatedTranscript, "Correction saved to the archive");
+    const saved = await persistTranscriptSnapshot(updatedTranscript, "Correction saved to the archive");
+    if (saved) setTranscript(updatedTranscript);
   };
 
   const loadAudit = async () => {
