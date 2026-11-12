@@ -594,7 +594,7 @@ function SessionPage() {
   );
   /** Commits reviewed text edits into the archive (original + history kept),
    * then runs the export with the corrected copy. */
-  const generateReviewedExport = async () => {
+  const generateReviewedPdf = async () => {
     if (!pdfReviewTranscript) return;
     const archived = applyReviewedCorrections(pdfReviewTranscript, reviewEdits);
     const hasCorrections = archived.some((segment, index) =>
@@ -616,9 +616,6 @@ function SessionPage() {
     setPdfReviewOpen(false);
     exportJob.run(reviewKind, exportCopy);
   };
-  // Keep the PDF review action name explicit for route bundles that may still
-  // reference the previous handler symbol while production assets are replaced.
-  const generateReviewedPdf = () => generateReviewedExport();
 
   // Transcript + flags merged into one chronological stream.
   type TimelineItem =
