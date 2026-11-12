@@ -906,7 +906,7 @@ function SessionPage() {
                 <p className="mt-1.5 text-[11px] text-muted-foreground">
                   {visibleTimeline.length === 0
                     ? "No transcript lines or bookmarks match."
-                    : `${visibleTimeline.length} match${visibleTimeline.length === 1 ? "" : "es"} — click one to jump to that moment in the recording.`}
+                    : `${visibleTimeline.length} match${visibleTimeline.length === 1 ? "" : "es"} — click a timestamp or bookmark to jump to that moment in the recording.`}
                 </p>
               )}
             </div>
