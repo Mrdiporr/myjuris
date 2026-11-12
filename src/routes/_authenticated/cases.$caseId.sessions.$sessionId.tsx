@@ -616,6 +616,9 @@ function SessionPage() {
     setPdfReviewOpen(false);
     exportJob.run(reviewKind, exportCopy);
   };
+  // Keep the PDF review action name explicit for route bundles that may still
+  // reference the previous handler symbol while production assets are replaced.
+  const generateReviewedPdf = () => generateReviewedExport();
 
   // Transcript + flags merged into one chronological stream.
   type TimelineItem =
