@@ -594,7 +594,7 @@ function SessionPage() {
   );
   /** Commits reviewed text edits into the archive (original + history kept),
    * then runs the export with the corrected copy. */
-  const generateReviewedExport = async () => {
+  const generateReviewedPdf = async () => {
     if (!pdfReviewTranscript) return;
     const archived = applyReviewedCorrections(pdfReviewTranscript, reviewEdits);
     const hasCorrections = archived.some((segment, index) =>
@@ -1192,7 +1192,7 @@ function SessionPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPdfReviewOpen(false)}>Cancel</Button>
-            <Button onClick={() => void generateReviewedExport()} disabled={savingReview || persisting}><FileText className="size-4" /> {savingReview ? <Loader2 className="size-4 animate-spin" /> : null}{reviewKind === "pdf" ? "Generate PDF" : "Export"}</Button>
+            <Button onClick={() => void generateReviewedPdf()} disabled={savingReview || persisting}><FileText className="size-4" /> {savingReview ? <Loader2 className="size-4 animate-spin" /> : null}{reviewKind === "pdf" ? "Generate PDF" : "Export"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
