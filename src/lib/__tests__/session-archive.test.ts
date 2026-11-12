@@ -9,4 +9,8 @@ describe("resolveSessionDuration", () => {
   it("uses the current 12-second recording duration over an older 7-second saved value", () => {
     expect(resolveSessionDuration(12, 0, 7)).toBe(12);
   });
+
+  it("uses a restored 5-second local duration over a stale 7-second cloud value", () => {
+    expect(resolveSessionDuration(0, 5, 7)).toBe(5);
+  });
 });
