@@ -8,4 +8,4 @@
 - [x] Transcript correction: quick edits on the session page + pre-export review flow; keep original + edit history (archive); exports use corrected text only
 - [x] Focused archive-flow review: verify transcript/bookmark jumps, case-list details, quick and pre-export correction controls, duration handling, and PDF review using browser-only sample data without altering saved archive content
 - [x] Fix archive defects found during review: clickable timestamp results, durable correction saves and visible history, correct duration preservation, and stable reviewed export snapshots
-- [ ] Fix reported published session failure: missing `generateReviewedPdf` handler and inability to start a new session; verify the supplied case/session route without changing saved archive data
+- [x] Fix reported published session failure: restore the `generateReviewedPdf` handler and verify the supplied case/session route without changing saved archive data
